@@ -170,9 +170,14 @@ def collect_keys() -> list[str]:
         add(os.getenv(f"GEMINI_API_KEY_{i}"))
     add(os.getenv("GOOGLE_API_KEY_1"))
     add(os.getenv("GEMINI_API_KEY_1"))
+    numbered = list(keys)
     add(os.getenv("GOOGLE_API_KEY"))
     add(os.getenv("GEMINI_API_KEY"))
     add(os.getenv("GOOGLE_GENERATIVE_AI_API_KEY"))
+    # Numbered keys are the live ring. The unnumbered base key is often already
+    # at daily Flash-Lite quota and would only add RPM/RPD 429 churn.
+    if numbered:
+        keys = numbered
     return keys
 
 
