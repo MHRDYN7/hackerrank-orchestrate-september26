@@ -1,0 +1,82 @@
+{
+  "image_01": {
+    "event_id": "event_253",
+    "amount": 4365000.0,
+    "caption": "Net payable IDR 4,365,000"
+  },
+  "image_02": {
+    "event_id": "event_1442",
+    "amount": 100000.0,
+    "caption": "Outstanding rent balance due INR 100,000"
+  },
+  "image_03": {
+    "event_id": "event_1545",
+    "amount": 41272.0,
+    "caption": "Grocery cash paid INR 41,272"
+  },
+  "image_04": {
+    "event_id": "event_1700",
+    "amount": 2854.0,
+    "caption": "Grocery delivery item bill INR 2,854"
+  },
+  "image_05": {
+    "event_id": "event_1786",
+    "amount": 704.05,
+    "caption": "Telecom amount due INR 704.05"
+  },
+  "image_06": {
+    "event_id": "event_3051",
+    "amount": 1995.0,
+    "caption": "Grocery invoice total INR 1,995"
+  },
+  "image_07": {
+    "event_id": "event_3231",
+    "amount": 8528.0,
+    "caption": "Restaurant grand total INR 8,528"
+  },
+  "image_08": {
+    "event_id": "event_4535",
+    "amount": 15339.0,
+    "caption": "Maintenance received INR 15,339"
+  },
+  "image_09": {
+    "event_id": "event_5170",
+    "amount": 723.0,
+    "caption": "Water bill received INR 723"
+  },
+  "image_10": {
+    "event_id": "event_6033",
+    "amount": 79679.26,
+    "caption": "Grocery invoice total INR 79,679.26"
+  },
+  "image_11": {
+    "event_id": "event_6859",
+    "amount": 3650.0,
+    "caption": "Hospital amount payable INR 3,650"
+  },
+  "image_12": {
+    "event_id": "event_7307",
+    "amount": 33.5,
+    "caption": "Taxi total USD 33.50"
+  },
+  "image_13": {
+    "event_id": "event_7941",
+    "amount": 2298.0,
+    "caption": "Tote bag order total INR 2,298"
+  },
+  "image_14": {
+    "event_id": "event_9421",
+    "amount": 4543.0,
+    "caption": "Pharmacy total INR 4,543"
+  },
+  "image_15": {
+    "event_id": "event_9806",
+    "amount": 9968.0,
+    "caption": "Airline grand total INR 9,968"
+  },
+  "image_16": {
+    "event_id": "event_10521",
+    "amount": 393.22,
+    "caption": "EV charging total INR 393.22"
+  }
+}

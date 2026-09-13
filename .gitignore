@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+**/__pycache__/
+**/*.pyc
+code/.venv/
+code/data/*.db
+code/data/*.db-journal
+code/.python-version
+.pytest_cache/
+*.zip
+.DS_Store
