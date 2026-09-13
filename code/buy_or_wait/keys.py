@@ -58,6 +58,9 @@ class KeyRing:
         return bool(self.keys)
 
 
+LANGSMITH_PROJECT_NAME = "hackerrank"
+
+
 def load_env() -> None:
     loaded = False
     for path in ENV_PATHS:
@@ -66,16 +69,19 @@ def load_env() -> None:
             loaded = True
     if not loaded:
         load_dotenv()
-    # LangGraph/LangChain pick up either name.
-    if os.getenv("LANGSMITH_TRACING", "").strip().lower() in {"true", "1", "yes"}:
-        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-    project = os.getenv("LANGSMITH_PROJECT", "").strip().strip('"')
-    if project:
-        os.environ["LANGSMITH_PROJECT"] = project
-        os.environ.setdefault("LANGCHAIN_PROJECT", project)
+    # Traces MUST go to the contest LangSmith project, never a default workspace name.
+    os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT_NAME
+    os.environ["LANGCHAIN_PROJECT"] = LANGSMITH_PROJECT_NAME
+    tracing = os.getenv("LANGSMITH_TRACING", "").strip().lower()
+    if tracing in {"true", "1", "yes"}:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGSMITH_TRACING"] = "true"
+    api_key = os.getenv("LANGSMITH_API_KEY", "").strip()
+    if api_key:
+        os.environ.setdefault("LANGCHAIN_API_KEY", api_key)
     endpoint = os.getenv("LANGSMITH_ENDPOINT", "").strip()
     if endpoint:
-        os.environ.setdefault("LANGCHAIN_ENDPOINT", endpoint)
+        os.environ["LANGCHAIN_ENDPOINT"] = endpoint
 
 
 def load_key_ring() -> KeyRing:
@@ -85,9 +91,10 @@ def load_key_ring() -> KeyRing:
         val = os.getenv(f"GEMINI_API_KEY_{i}", "").strip()
         if val:
             keys.append(val)
-    single = os.getenv("GEMINI_API_KEY", "").strip()
-    if single and single not in keys:
-        keys.append(single)
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"):
+        single = os.getenv(name, "").strip()
+        if single and single not in keys:
+            keys.append(single)
     preferred = os.getenv("GEMINI_MODEL", "").strip()
     ring = KeyRing(keys=keys)
     if preferred:

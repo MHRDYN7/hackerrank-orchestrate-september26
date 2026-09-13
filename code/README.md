@@ -10,7 +10,9 @@ From this `code/` directory:
 uv sync
 ```
 
-Copy `.env.example` to `.env` (repo root or `code/`) and set `GEMINI_API_KEY`. The run starts on `gemini-3.5-flash-lite` at `thinking_level=high`. After a 429 / daily RPD cap it switches to `gemini-3.1-flash-lite` on the same key. Only Flash-Lite models are used. Without a key the run is engine-only.
+Copy `.env.example` to `.env` (repo root or `code/`) and set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`). The run starts on `gemini-3.5-flash-lite` at `thinking_level=high`. After a 429 / daily RPD cap it switches to `gemini-3.1-flash-lite` on the same key. Only Flash-Lite models are used. Without a key the run is engine-only.
+
+LangSmith traces are always written to project `hackerrank` (`LANGSMITH_PROJECT` is forced in code).
 
 ## Run
 

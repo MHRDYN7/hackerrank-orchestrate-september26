@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from .keys import KeyRing
+from .keys import KeyRing, load_env
 from .ratelimit import PACER, is_rpd_error, is_rpm_error
 from .runner import decide_row
 from .tools import ALL_TOOLS, committed, store
@@ -80,6 +80,7 @@ def _llm(ring: KeyRing):
 
 
 def build_graph(ring: KeyRing):
+    load_env()
     tools = ToolNode(ALL_TOOLS)
 
     def agent(state: AgentState):
@@ -150,8 +151,13 @@ def run_request(app, request_id: str, ring: KeyRing) -> dict[str, str]:
             )
         ),
     ]
+    config = {
+        "run_name": f"buy_or_wait:{request_id}",
+        "tags": ["buy-or-wait", "hackerrank"],
+        "metadata": {"request_id": request_id, "model": ring.model},
+    }
     try:
-        app.invoke({"request_id": request_id, "messages": prompt, "rounds": 0})
+        app.invoke({"request_id": request_id, "messages": prompt, "rounds": 0}, config=config)
     except Exception:
         return decide_row(store(), request_id)
     return committed(request_id) or decide_row(store(), request_id)
