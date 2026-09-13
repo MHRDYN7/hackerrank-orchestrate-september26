@@ -451,3 +451,23 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T09:47:21Z] Iterate flawed samples 11/17/18/19/21
+
+User Prompt (verbatim, secrets redacted):
+ok I agree go ahead. Give code execution/calculator tool to agent if needed, and let's tackle the failure case one by one and keep improving the architecture. Once done, we will run all 25 and then see if there are further improvements required.
+
+Agent Response Summary:
+Shipped agent-owned tools (cadence facts, calculator, run_python, try_today_with_changes). request_11 now matches status, method, and today's full-payment plan; remaining misses are amount, earliest, and an extra cloud-storage stop. request_17 matches everything except amount_safe. request_18 matches wait date and plan formatting. Did not run all 25 yet.
+
+Actions:
+* Added cadence/calculator/python/flexible-action tools
+* Scored request_11 then 17/18/19/21
+* Enforced wait=>affordable_later and partial second date in commit_decision
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none

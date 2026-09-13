@@ -844,6 +844,16 @@ def commit_decision(
     }
     if row["affordability_status"] == "affordable_now" and not row["earliest_date_for_full_payment"]:
         row["earliest_date_for_full_payment"] = iso(state.request_date)
+    if recommended_payment_method == "wait":
+        row["affordability_status"] = "affordable_later"
+    if recommended_payment_method == "partial_payment" and row["payment_plan"] not in {"", "none"}:
+        bits = row["payment_plan"].split("|")
+        if len(bits) == 2 and row["earliest_date_for_full_payment"]:
+            first_day, first_amt = bits[0].split(":", 1)
+            _, second_amt = bits[1].split(":", 1)
+            row["payment_plan"] = (
+                f"{first_day}:{first_amt}|{row['earliest_date_for_full_payment']}:{second_amt}"
+            )
     errs = validate_row(row, req, st.options.get(request_id, []))
     row["_simulate_safe"] = ok
     row["_trough"] = trough
