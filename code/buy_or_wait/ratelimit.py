@@ -81,6 +81,7 @@ def is_rpm_error(exc: Exception) -> bool:
 
 
 def is_rpd_error(exc: Exception) -> bool:
+    """Daily quota only. Generic 429 RESOURCE_EXHAUSTED is usually RPM."""
     text = str(exc).lower()
     if any(tok in text for tok in ("per minute", "perminute", "per_minute")):
         return False
@@ -95,8 +96,5 @@ def is_rpd_error(exc: Exception) -> bool:
             "requestsperday",
             "generate_content_free_tier_requests",
             "limit: 0",
-            "quota exceeded",
-            "resource exhausted",
-            "resource_exhausted",
         )
     )
