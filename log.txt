@@ -521,3 +521,23 @@ Parent Agent: none
 Language: py
 Time Remaining: 2h 20m
 
+## [2026-09-13T10:19:14Z] Disabled TPM pacer that stacked 200s latency
+
+User Prompt (verbatim, secrets redacted):
+btw, the latency is more than 200s for all this time (prev was around 40s). DId you do this to avoid tpm??
+
+Agent Response Summary:
+Yes. A preemptive 12 RPM / 200k TPM pacer slept 5s between calls and up to 60s when tokens neared the cap, and ten workers stacked those waits onto one clock. That is now a no-op. Parallel 429s also rebound a stale 3.5 client after switching to 3.1 and slept 65s; each attempt now uses the live Flash-Lite model. LangChain's six internal 429 retries are off; we wait only the API retry_delay.
+
+Actions:
+* Disabled GeminiPacer.wait preemptive RPM/TPM sleeps
+* Rebind LLM every attempt; ignore stale-model 429s
+* ChatGoogleGenerativeAI max_retries=1; parse retry_delay
+* Timed 4-sample run after pacer removal (still ~131-146s from real 429 waits)
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
