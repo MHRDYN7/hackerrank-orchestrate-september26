@@ -246,8 +246,17 @@ def build_series(events: list[dict], user_id: str) -> list[Series]:
     return series
 
 
-def series_from_event(events: list[dict], event_id: str, user_id: str) -> Series | None:
-    """Build a recurrence from one event using other settled rows in the same category."""
+def series_from_event(
+    events: list[dict],
+    event_id: str,
+    user_id: str,
+    amount_mode: str = "auto",
+) -> Series | None:
+    """Project a recurrence from one event using other settled rows in the same category.
+
+    amount_mode is last, typical, or auto. Auto uses last for flexible series and typical
+    for fixed spend, and always typical when the last ticket is an outlier versus the median.
+    """
     found = None
     for row in events:
         if row.get("event_id") == event_id:
@@ -272,21 +281,40 @@ def series_from_event(events: list[dict], event_id: str, user_id: str) -> Series
     gaps = [g for g in gaps if 0 < g < 60]
     med = median(gaps) if gaps else 30
     last = found if found.get("event_date_p") else rows[-1]
+    amounts = [float(r["amount_home"]) for r in rows]
+    typical = float(median(amounts)) if amounts else float(last.get("amount_home") or 0)
+    last_amt = float(last.get("amount_home") or 0)
+    flex = (last.get("flexibility") or "fixed").strip()
+    mode = (amount_mode or "auto").strip().lower()
+    if mode == "median":
+        mode = "typical"
+    if mode == "typical":
+        amount = typical
+    elif mode == "last":
+        amount = last_amt
+    else:
+        outlier = typical > 0 and last_amt > 1.6 * typical
+        if outlier:
+            amount = typical
+        elif flex in {"reducible", "stoppable", "reducible_or_stoppable"}:
+            amount = last_amt
+        else:
+            amount = typical
     return Series(
         series_id=f"{user_id}:from:{event_id}",
         user_id=user_id,
         description=last.get("description") or cat,
         category=cat,
         direction="debit",
-        amount=float(last.get("amount_home") or 0),
+        amount=amount,
         last_date=last["event_date_p"],
         period_days=int(round(med)) if med else 30,
         monthly=25 <= float(med) <= 36,
         event_id=event_id,
-        flexibility=last.get("flexibility") or "fixed",
+        flexibility=flex,
         min_allowed=last.get("min_allowed"),
         event_type=last.get("event_type") or "",
-        typical_amount=float(last.get("amount_home") or 0),
+        typical_amount=typical,
     )
 
 
@@ -732,26 +760,11 @@ def amount_safe_to_pay(state: UserState, items: list[CashItem]) -> float:
 
 
 def earliest_full_payment(state: UserState, items: list[CashItem]) -> date | None:
-    """First date a single full payment is safe.
-
-    If another payday still falls on or before the request deadline, require
-    the payment to survive without that next salary. That keeps earliest dates
-    conservative when the user still has time to wait for another paycheck.
-    """
+    """First date a single full payment is safe on this ledger, with no spending changes."""
     end = state.request_date + timedelta(days=FORECAST_DAYS)
-    salaries = sorted({it.item_date for it in items if it.category == "salary" and it.amount > 0})
     d = state.request_date
     while d <= end:
-        next_after = [s for s in salaries if s > d]
-        use_items = items
-        if next_after and next_after[0] <= state.deadline:
-            drop = next_after[0]
-            use_items = [
-                it
-                for it in items
-                if not (it.category == "salary" and it.item_date == drop)
-            ]
-        ok, _, _ = simulate(state, use_items, [(d, state.requested)])
+        ok, _, _ = simulate(state, items, [(d, state.requested)])
         if ok:
             return d
         d += timedelta(days=1)

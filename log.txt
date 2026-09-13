@@ -393,3 +393,61 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T09:24:42Z] Advice: TimesFM, code exec, forecast design
+
+User Prompt (verbatim, secrets redacted):
+do you think having  a numerical time series forecasting model like timesfm 2.5 help in anyway. Also, what is your suggestion for these questions and based on what evidence. Tell me
+would it help if we let the agent execute code (possible for gemini). And also tell me the real situation behind forecasting, like what data we have, what is the need for the 90 day forecasting, can we not just dump all the info events from each time point into a subagent (optionally called by main agent) and let it make the decision? What are your thoughts
+
+Agent Response Summary:
+Advised against TimesFM 2.5 and against dumping events into a subagent for the 90-day walk. Explained that almost all future cashflows are implied recurrences, not listed pending rows, and gold is exact-match so a statistical forecast cannot hit scored amounts. Gave evidence-backed recommendations for category-level series, same-day salary, earliest-date, ranking, and plan decimals.
+
+Actions:
+* Counted dataset sizes: 275 users, 25k events, 141 pending/scheduled
+* Compared variable-category description cardinality on flawed samples
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
+
+## [2026-09-13T09:27:25Z] Agree agent-owned forecast decisions
+
+User Prompt (verbatim, secrets redacted):
+ok, btw, I would prefer our agent making these decisions, instead of us trying to hardcode logic, what do you say?
+
+Agent Response Summary:
+Agreed that recurrence, spending-change, and ranking choices should be made by the tool-using agent, not by sample-specific engine branches. Kept the numeric 90-day walk, FX, installment expansion, and simulate/binary-search in the kernel as operators the agent calls. Recommended exposing cadence facts and extra_event_ids so Flash-Lite can choose what to project.
+
+Actions:
+* No code change this turn; architecture steer only
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
+
+## [2026-09-13T09:35:17Z] Agent-owned tools: cadence, calculator, no engine overwrite
+
+User Prompt (verbatim, secrets redacted):
+ok I agree go ahead. Give code execution/calculator tool to agent if needed, and let's tackle the failure case one by one and keep improving the architecture. Once done, we will run all 25 and then see if there are further improvements required.
+
+Agent Response Summary:
+Implemented agent-owned decisions with cadence facts, extra_event_ids last/typical modes, calculate/run_python/format_payment_plan, and commit_decision that no longer overwrites ranking. Next is scoring request_11 then the other categorical misses.
+
+Actions:
+* Updated engine series_from_event and earliest_full_payment
+* Added cadence table, calculator, and python snippet tools
+* Rewrote system prompt; removed decide_row fallback after a live agent run
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none

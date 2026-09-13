@@ -42,6 +42,19 @@ def fmt_amount(value: float | int | None) -> str:
     return text
 
 
+def fmt_plan_amount(value: float | int | None, style: str | None = None) -> str:
+    """Format a payment-plan amount. Two decimals when style (or the value) has a decimal point."""
+    if value is None:
+        return "0"
+    q = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    style_s = "" if style is None else str(style).strip()
+    if "." in style_s:
+        return f"{q:.2f}"
+    if q == q.to_integral():
+        return str(int(q))
+    return f"{q:.2f}"
+
+
 def split_list(value: str | None) -> list[str]:
     if not value:
         return []

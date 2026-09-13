@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import ast
+import io
 import json
+import math
+import threading
+from collections import defaultdict
 from contextvars import ContextVar
-from dataclasses import replace
+from datetime import date, timedelta
+from decimal import Decimal
+from statistics import median
 from typing import Optional
 
 from langchain_core.tools import tool
 
 from .db import query_cash_items as db_query_cash_items
 from .engine import (
+    VARIABLE_CATEGORIES,
     amount_safe_to_pay as max_safe_today,
     build_forecast,
     earliest_full_payment,
@@ -18,7 +26,7 @@ from .engine import (
     series_from_event,
     simulate,
 )
-from .formatters import fmt_amount, iso, parse_date, parse_float
+from .formatters import fmt_amount, fmt_plan_amount, iso, parse_date, parse_float
 from .messages import Amendment
 from .runner import request_record
 from .store import Store
@@ -26,6 +34,7 @@ from .validate import validate_row
 
 _STORE: Store | None = None
 _LAST: dict[str, dict] = {}
+_LAST_LOCK = threading.Lock()
 _CASE: ContextVar[dict[str, str]] = ContextVar("buy_or_wait_case", default={})
 
 
@@ -137,6 +146,8 @@ def get_context(request_id: Optional[str] = None) -> str:
         "messages": msgs,
         "images": images,
         "recurring_series": series,
+        "regular_spend_candidates": _cadence_facts(user_id),
+        "requested_amount_plan_text": fmt_plan_amount(req["requested_amount"], str(req.get("requested_amount") or "")),
         "upcoming_pending_or_scheduled": upcoming[:40],
     }
     return json.dumps(packet, default=str)
@@ -189,21 +200,94 @@ def get_image_extraction(image_id: str) -> str:
     return json.dumps(meta)
 
 
+def _parse_extra_event_ids(blob: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for bit in (blob or "").split("|"):
+        bit = bit.strip()
+        if not bit:
+            continue
+        if ":" in bit:
+            eid, mode = bit.split(":", 1)
+            mode = mode.strip().lower()
+            if mode in {"last", "typical", "auto", "median"}:
+                out.append((eid.strip(), "typical" if mode == "median" else mode))
+                continue
+        out.append((bit, "auto"))
+    return out
+
+
+def _cadence_facts(user_id: str) -> list[dict]:
+    events = store().events.get(user_id, [])
+    series = store().series.get(user_id, [])
+    have = {(s.category, s.direction) for s in series}
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for row in events:
+        if row.get("status") != "settled" or row.get("direction") != "debit":
+            continue
+        if row.get("amount_home") is None or row.get("event_date_p") is None:
+            continue
+        groups[row.get("category") or ""].append(row)
+    out = []
+    for cat, rows in sorted(groups.items()):
+        rows = sorted(rows, key=lambda r: r["event_date_p"])
+        if len(rows) < 3:
+            continue
+        gaps = [
+            (rows[i]["event_date_p"] - rows[i - 1]["event_date_p"]).days for i in range(1, len(rows))
+        ]
+        gaps = [g for g in gaps if 0 < g < 45]
+        if len(gaps) < 2:
+            continue
+        med = float(median(gaps))
+        amounts = [float(r["amount_home"]) for r in rows]
+        typical = float(median(amounts))
+        last = rows[-1]
+        last_amt = float(last["amount_home"])
+        flex = last.get("flexibility") or "fixed"
+        regular = 5 <= med <= 16 or 17 <= med <= 24 or 25 <= med <= 36
+        already = (cat, "debit") in have
+        outlier = typical > 0 and last_amt > 1.6 * typical
+        if already or not regular:
+            suggested = ""
+        elif flex != "fixed" and not outlier:
+            suggested = f"{last['event_id']}:last"
+        else:
+            suggested = f"{last['event_id']}:typical"
+        out.append(
+            {
+                "category": cat,
+                "n": len(rows),
+                "unique_descriptions": len({r.get("description") for r in rows}),
+                "median_gap_days": med,
+                "regular": regular,
+                "already_in_detected_series": already,
+                "last_event_id": last["event_id"],
+                "last_amount": last_amt,
+                "typical_amount": typical,
+                "last_is_outlier": outlier,
+                "flexibility": flex,
+                "minimum_allowed_amount": last.get("min_allowed"),
+                "last_description": last.get("description"),
+                "variable_category": cat in VARIABLE_CATEGORIES,
+                "suggested_extra_event_id": suggested,
+            }
+        )
+    return out
+
+
 def _state_for(request_id: str, extra_event_ids: str = ""):
     st = store()
     req = request_record(st, request_id)
     user_id = req["user_id"]
     series = list(st.series.get(user_id, []))
-    if extra_event_ids.strip():
-        have = {s.event_id for s in series}
-        for eid in extra_event_ids.split("|"):
-            eid = eid.strip()
-            if not eid or eid in have:
-                continue
-            extra = series_from_event(st.events.get(user_id, []), eid, user_id)
-            if extra:
-                series.append(extra)
-                have.add(eid)
+    have = {s.event_id for s in series}
+    for eid, mode in _parse_extra_event_ids(extra_event_ids):
+        if not eid or eid in have:
+            continue
+        extra = series_from_event(st.events.get(user_id, []), eid, user_id, amount_mode=mode)
+        if extra:
+            series.append(extra)
+            have.add(eid)
     return make_state(
         st.profiles[user_id],
         req,
@@ -216,7 +300,7 @@ def _state_for(request_id: str, extra_event_ids: str = ""):
 
 @tool
 def compute_capacity(request_id: Optional[str] = None, extra_event_ids: str = "") -> str:
-    """Return the maximum amount that is safe to pay on request_date before spending changes, and the earliest date a single full payment becomes safe. extra_event_ids is an optional pipe-separated list of event ids to project as recurrences."""
+    """Return amount_safe_to_pay on request_date before spending changes, and the earliest date a single full payment is safe, for the ledger built with extra_event_ids. extra_event_ids is event_id or event_id:last|event_id:typical, pipe-separated."""
     request_id = resolve_request_id(request_id)
     state = _state_for(request_id, extra_event_ids)
     items = build_forecast(state, {})
@@ -236,7 +320,17 @@ def expand_payment_option(payment_option_id: str) -> str:
         for opt in opts:
             if opt.get("payment_option_id") == payment_option_id:
                 pays = expand_option(opt)
-                return json.dumps({"payment_option_id": payment_option_id, "payment_plan": plan_text(pays)})
+                raw = str(opt.get("payment_amount") or "").strip()
+                return json.dumps(
+                    {
+                        "payment_option_id": payment_option_id,
+                        "payment_plan": plan_text(pays, raw or None),
+                        "payment_amount_text": raw,
+                        "number_of_payments": opt.get("number_of_payments"),
+                        "first_payment_date": opt.get("first_payment_date"),
+                        "total_payable_amount": opt.get("total_payable_amount"),
+                    }
+                )
     return json.dumps({"error": "unknown payment_option_id"})
 
 
@@ -314,6 +408,9 @@ def inspect_ledger(request_id: Optional[str] = None, spending_changes: str = "no
             "start_balance": state.start_balance,
             "minimum_balance_to_keep": state.min_balance,
             "home_currency": state.home,
+            "extra_event_ids": extra_event_ids,
+            "amount_safe_to_pay": fmt_amount(max_safe_today(state, items)),
+            "earliest_date_for_full_payment": iso(earliest_full_payment(state, items)),
             "item_count": len(rows),
             "items": rows,
         },
@@ -322,18 +419,21 @@ def inspect_ledger(request_id: Optional[str] = None, spending_changes: str = "no
 
 
 @tool
-def evaluate_candidates(request_id: Optional[str] = None) -> str:
-    """Return compute_capacity plus legal seller installment schedules. Does not pick a recommendation."""
+def evaluate_candidates(request_id: Optional[str] = None, extra_event_ids: str = "") -> str:
+    """Return compute_capacity plus legal seller installment schedules for this ledger. Does not pick a recommendation."""
     request_id = resolve_request_id(request_id)
-    state = _state_for(request_id)
+    state = _state_for(request_id, extra_event_ids)
     items = build_forecast(state, {})
     opts = []
     for opt in store().options.get(request_id, []):
+        raw = str(opt.get("payment_amount") or "").strip()
         opts.append(
             {
                 "payment_option_id": opt.get("payment_option_id"),
                 "payment_method": opt.get("payment_method"),
-                "payment_plan": plan_text(expand_option(opt)) if opt.get("payment_method") == "installments" else None,
+                "payment_plan": plan_text(expand_option(opt), raw or None)
+                if opt.get("payment_method") == "installments"
+                else None,
                 "financing_fee": opt.get("financing_fee"),
                 "total_payable_amount": opt.get("total_payable_amount"),
             }
@@ -540,6 +640,98 @@ def get_exchange_rate(from_currency: str, to_currency: str, rate_date: str) -> s
 
 
 @tool
+def list_cadences(user_id: Optional[str] = None) -> str:
+    """Return regular debit cadences, including mixed-description categories. Use suggested_extra_event_id when you decide to project that category."""
+    user_id = resolve_user_id(user_id)
+    return json.dumps(_cadence_facts(user_id), default=str)
+
+
+@tool
+def calculate(expression: str) -> str:
+    """Evaluate arithmetic. Supports + - * / ** (), min, max, abs, and round. Use this for remainders, headroom, and comparing amounts."""
+    expr = (expression or "").strip()
+    if not expr or len(expr) > 500:
+        return json.dumps({"error": "empty or too long"})
+    allowed = {"min": min, "max": max, "abs": abs, "round": round, "pow": pow}
+    try:
+        tree = ast.parse(expr, mode="eval")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id not in allowed:
+                return json.dumps({"error": f"name not allowed: {node.id}"})
+            if isinstance(node, ast.Attribute):
+                return json.dumps({"error": "attributes not allowed"})
+            if isinstance(node, ast.Call) and not (
+                isinstance(node.func, ast.Name) and node.func.id in allowed
+            ):
+                return json.dumps({"error": "call not allowed"})
+        value = eval(compile(tree, "<calc>", "eval"), {"__builtins__": {}}, allowed)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)[:200]})
+    return json.dumps({"expression": expr, "value": value, "formatted": fmt_amount(float(value))})
+
+
+@tool
+def run_python(code: str) -> str:
+    """Run a short Python snippet for dated arithmetic. Names: math, Decimal, date, timedelta, min, max, sum, abs, round, range, enumerate. Assign `result` or print. No imports, files, or network."""
+    src = (code or "").strip()
+    if not src or len(src) > 4000:
+        return json.dumps({"error": "empty or too long"})
+    lowered = src.lower()
+    for tok in ("import ", "open(", "exec(", "eval(", "__", "os.", "sys.", "subprocess", "pathlib"):
+        if tok in lowered:
+            return json.dumps({"error": f"forbidden token: {tok.strip()}"})
+    stdout = io.StringIO()
+
+    def _print(*args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["file"] = stdout
+        print(*args, **kwargs)
+
+    ns = {
+        "math": math,
+        "Decimal": Decimal,
+        "date": date,
+        "timedelta": timedelta,
+        "min": min,
+        "max": max,
+        "sum": sum,
+        "abs": abs,
+        "round": round,
+        "range": range,
+        "enumerate": enumerate,
+        "int": int,
+        "float": float,
+        "str": str,
+        "list": list,
+        "dict": dict,
+        "True": True,
+        "False": False,
+        "None": None,
+        "result": None,
+        "print": _print,
+    }
+    try:
+        exec(src, {"__builtins__": {}}, ns)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)[:300], "stdout": stdout.getvalue()[:1000]})
+    out = stdout.getvalue()[:2000]
+    result = ns.get("result")
+    return json.dumps({"result": result, "stdout": out}, default=str)
+
+
+@tool
+def format_payment_plan(payments: str, amount_style: str = "") -> str:
+    """Rewrite YYYY-MM-DD:amount|... using two decimal places when amount_style has a decimal point, otherwise integers when whole."""
+    if not payments or payments == "none":
+        return json.dumps({"payment_plan": "none"})
+    bits = []
+    for bit in payments.split("|"):
+        day_s, amt_s = bit.split(":", 1)
+        bits.append(f"{day_s.strip()}:{fmt_plan_amount(float(amt_s), amount_style or amt_s)}")
+    return json.dumps({"payment_plan": "|".join(bits)})
+
+
+@tool
 def commit_decision(
     affordability_status: str,
     recommended_payment_method: str,
@@ -551,7 +743,7 @@ def commit_decision(
     extra_event_ids: str = "",
     request_id: Optional[str] = None,
 ) -> str:
-    """Commit the final recommendation for the bound request. You must supply every decision field. amount_safe_to_pay is the maximum safe payment on request_date before spending changes. Call compute_capacity and simulate_plan first so the numbers are grounded. extra_event_ids must match the ledger you used to compute capacity."""
+    """Commit your recommendation. Supply every output field yourself. amount_safe_to_pay must be copied from compute_capacity or inspect_ledger for the same extra_event_ids, before spending changes. This tool records your fields; it does not replace them with an engine ranking."""
     request_id = resolve_request_id(request_id)
     st = store()
     req = request_record(st, request_id)
@@ -561,13 +753,6 @@ def commit_decision(
     plan_items = build_forecast(state, changes) if changes else base_items
     safe_today = max_safe_today(state, base_items)
     earliest = earliest_full_payment(state, base_items)
-    if not amount_safe_to_pay.strip():
-        amount_safe_to_pay = fmt_amount(safe_today)
-    if earliest_date_for_full_payment.strip() == "" and earliest is not None:
-        if affordability_status == "affordable_now":
-            earliest_date_for_full_payment = iso(state.request_date)
-        elif recommended_payment_method != "not_recommended":
-            earliest_date_for_full_payment = iso(earliest)
     extra = []
     if payment_plan and payment_plan != "none":
         for bit in payment_plan.split("|"):
@@ -576,7 +761,7 @@ def commit_decision(
     ok, trough, breach = simulate(state, plan_items, extra)
     row = {
         "request_id": request_id,
-        "amount_safe_to_pay": amount_safe_to_pay,
+        "amount_safe_to_pay": amount_safe_to_pay.strip() or fmt_amount(safe_today),
         "affordability_status": affordability_status,
         "recommended_payment_method": recommended_payment_method,
         "payment_plan": payment_plan or "none",
@@ -584,6 +769,8 @@ def commit_decision(
         "spending_changes_needed": spending_changes_needed or "none",
         "decision_explanation": (decision_explanation or "").replace("\n", " "),
     }
+    if row["affordability_status"] == "affordable_now" and not row["earliest_date_for_full_payment"]:
+        row["earliest_date_for_full_payment"] = iso(state.request_date)
     errs = validate_row(row, req, st.options.get(request_id, []))
     row["_simulate_safe"] = ok
     row["_trough"] = trough
@@ -592,16 +779,34 @@ def commit_decision(
     row["_computed_earliest"] = iso(earliest)
     if errs:
         row["_validation"] = errs
-    _LAST[request_id] = {k: v for k, v in row.items() if not k.startswith("_")}
+    clean = {k: v for k, v in row.items() if not k.startswith("_")}
+    with _LAST_LOCK:
+        _LAST[request_id] = clean
     return json.dumps(row, default=str)
 
 
 def committed(request_id: str) -> dict[str, str] | None:
-    return _LAST.get(request_id)
+    with _LAST_LOCK:
+        row = _LAST.get(request_id)
+        return dict(row) if row else None
+
+
+def missing_commit_row(request_id: str) -> dict[str, str]:
+    return {
+        "request_id": request_id,
+        "amount_safe_to_pay": "0",
+        "affordability_status": "not_affordable",
+        "recommended_payment_method": "not_recommended",
+        "payment_plan": "none",
+        "earliest_date_for_full_payment": "",
+        "spending_changes_needed": "none",
+        "decision_explanation": "The agent did not call commit_decision.",
+    }
 
 
 ALL_TOOLS = [
     get_context,
+    list_cadences,
     inspect_ledger,
     get_profile,
     get_raw_request,
@@ -617,6 +822,9 @@ ALL_TOOLS = [
     list_images,
     get_image_extraction,
     get_exchange_rate,
+    calculate,
+    run_python,
+    format_payment_plan,
     compute_capacity,
     expand_payment_option,
     simulate_plan,
