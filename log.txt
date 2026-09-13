@@ -541,3 +541,33 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T10:21:43Z] SESSION START
+
+tool=Cursor
+Repo Root: /workspace
+Branch: cursor/sample-agent-iteration-9b40
+Worktree: /workspace
+Parent Agent: none
+Language: py
+Time Remaining: 2h 8m
+
+## [2026-09-13T10:33:00Z] 25-sample gold compare; not ready for 250
+
+User Prompt (verbatim, secrets redacted):
+anyway, if you have tested all 25 with the latest prompt + arch, did you compare the results with the gold sample outputs? what do you thing, how far away are we from the 250 test try?
+
+Agent Response Summary:
+Had not scored all 25 on the latest agent-owned prompt/arch; ran them just now on gemini-3.1-flash-lite at concurrency 10 (575s). Compared every scored field to sample_requests.csv gold: 3/25 exact (01, 09, 16). Status/method/plan 12/25, amounts 4/25, earliest 22/25. Two systematic gaps: wait instead of installment/partial, and proceeding on not_affordable cases. Recommended against a 250-row try until those decision rules tighten or more keys arrive.
+
+Actions:
+* Ran uv run python main.py --samples --concurrency 10
+* Wrote code/evaluation/sample_predictions.csv
+* Compared all 25 rows to dataset/sample_requests.csv gold fields
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
