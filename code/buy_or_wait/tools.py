@@ -601,6 +601,43 @@ def list_series(user_id: Optional[str] = None) -> str:
 
 
 @tool
+def list_flexible_actions(request_id: Optional[str] = None, extra_event_ids: str = "") -> str:
+    """List legal stop and reduce_to actions for the current ledger, including extra projected series. Only non-protected flexible categories the user permits are included."""
+    request_id = resolve_request_id(request_id)
+    state = _state_for(request_id, extra_event_ids)
+    actions = []
+    for ser in state.series:
+        if ser.direction != "debit":
+            continue
+        if ser.category in state.protect:
+            continue
+        flex = ser.flexibility or "fixed"
+        if flex in {"stoppable", "reducible_or_stoppable"} and ser.category in state.stop_ok:
+            actions.append(
+                {
+                    "action": f"stop:{ser.event_id}",
+                    "event_id": ser.event_id,
+                    "category": ser.category,
+                    "description": ser.description,
+                    "current_amount": ser.amount,
+                }
+            )
+        if flex in {"reducible", "reducible_or_stoppable"} and ser.category in state.reduce_ok:
+            if ser.min_allowed is not None and ser.min_allowed < ser.amount:
+                actions.append(
+                    {
+                        "action": f"reduce_to:{ser.event_id}:{fmt_amount(ser.min_allowed)}",
+                        "event_id": ser.event_id,
+                        "category": ser.category,
+                        "description": ser.description,
+                        "current_amount": ser.amount,
+                        "minimum_allowed_amount": ser.min_allowed,
+                    }
+                )
+    return json.dumps({"extra_event_ids": extra_event_ids, "actions": actions}, default=str)
+
+
+@tool
 def list_images(user_id: Optional[str] = None) -> str:
     """Return cached image extractions for the bound user. Pass another user_id to filter a different user."""
     user_id = resolve_user_id(user_id)
@@ -819,6 +856,7 @@ ALL_TOOLS = [
     get_event,
     get_linked_events,
     list_series,
+    list_flexible_actions,
     list_images,
     get_image_extraction,
     get_exchange_rate,
