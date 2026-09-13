@@ -200,6 +200,13 @@ def run_eval(store, use_agent: bool, concurrency: int = 10) -> list[dict[str, st
                     print(f"processed {done}/{len(ids)}", flush=True)
         elapsed = time.monotonic() - t0
         print(f"batch {start // workers + 1} n={len(chunk)} wall_s={elapsed:.1f}", flush=True)
+        if done % 10 == 0 or done == len(ids):
+            checkpoint = [
+                rows_by_id[rid] if rid in rows_by_id else decide_row(store, rid)
+                for rid in ids
+            ]
+            write_output(checkpoint)
+            print(f"checkpoint {done}/{len(ids)} -> {OUTPUT_PATH}", flush=True)
     return [rows_by_id[rid] for rid in ids]
 
 

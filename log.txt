@@ -694,3 +694,40 @@ Parent Agent: none
 Language: py
 Time Remaining: 1h 4m
 
+## [2026-09-13T11:42:12Z] Eval ETA vs 10-minute submit buffer
+
+User Prompt (verbatim, secrets redacted):
+we only have 50 mins left. will the entire thing finish at least 10 mins earlier so that I get the time to submit?
+
+Agent Response Summary:
+250-row agent eval is at 50/250 after ~8 minutes (started 11:33:42Z). Extrapolated finish ~12:12 UTC, about 18 minutes before the 18:00 IST deadline and ~8 minutes before a 10-minute submission buffer. RPM waits of 30-38s appear every few batches; leaving the run in place rather than restarting.
+
+Actions:
+* Read /tmp/eval250.log progress
+* Projected remaining wall time from observed 9.2s/request including retries
+
+Context:
+tool=Cursor
+branch=cursor/agent-25-eval-run-dacb
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
+## [2026-09-13T11:54:06Z] Checkpoint output.csv; agent eval still in memory
+
+User Prompt (verbatim, secrets redacted):
+anyway keep checking the outputs, and make sure the output.csv is getting updated
+
+Agent Response Summary:
+The live 250-row agent process only writes output.csv at the end; the file was still the 07:54 snapshot at 100/250. Wrote a full current-engine output.csv (250 rows) as a submit-ready backup and added per-10-row checkpoints for future runs. Left the agent eval running (110/250); it will overwrite output.csv when it finishes. ETA around 12:19 UTC.
+
+Actions:
+* uv run python main.py --engine-only wrote /workspace/output.csv
+* Patch code/main.py to checkpoint after every 10 eval rows
+* Confirmed tmux buy-or-wait-eval-250 still running
+
+Context:
+tool=Cursor
+branch=cursor/agent-25-eval-run-dacb
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
