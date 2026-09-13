@@ -81,20 +81,17 @@ def is_rpm_error(exc: Exception) -> bool:
 
 
 def is_rpd_error(exc: Exception) -> bool:
-    """Daily quota only. Generic 429 RESOURCE_EXHAUSTED is usually RPM."""
+    """Daily quota only. Free-tier generate_content_free_tier_requests is also the RPM metric."""
     text = str(exc).lower()
-    if any(tok in text for tok in ("per minute", "perminute", "per_minute")):
+    compact = text.replace("_", "").replace(" ", "")
+    if "perminute" in compact or "limit: 15" in text:
         return False
     return any(
-        tok in text
+        tok in compact
         for tok in (
-            "per day",
             "perday",
-            "per_day",
             "daily",
             "rpd",
             "requestsperday",
-            "generate_content_free_tier_requests",
-            "limit: 0",
         )
-    )
+    ) or "limit: 0" in text

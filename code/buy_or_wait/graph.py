@@ -11,7 +11,7 @@ from langgraph.prebuilt import ToolNode
 from .keys import KeyRing, collect_keys, load_env
 from .ratelimit import PACER, gemini_slot, is_rpd_error, is_rpm_error, model_from_exc, retry_seconds
 from .runner import decide_row, request_record
-from .tools import ALL_TOOLS, bind_case, committed, missing_commit_row, store
+from .tools import ALL_TOOLS, bind_case, committed, store
 from .usage import TRACKER
 
 # Graph-step safety only. Conversation turns are not capped; pending tool calls always run.
@@ -44,7 +44,7 @@ def _llm(ring: KeyRing):
         "google_api_key": key,
         "temperature": 0,
         "thinking_level": "high",
-        "max_retries": 1,
+        "max_retries": 0,
     }
     try:
         model = ChatGoogleGenerativeAI(**kwargs)
@@ -65,6 +65,7 @@ def build_graph(ring: KeyRing):
     def agent(state: AgentState):
         msg = None
         last_err: Exception | None = None
+        rpm_hops = 0
         for attempt in range(16):
             llm = _llm(ring)
             if llm is None:
@@ -94,10 +95,14 @@ def build_graph(ring: KeyRing):
                         slot.release()
                         break
                 elif is_rpm_error(exc):
-                    if ring.live_count() > 1:
+                    rpm_hops += 1
+                    live = ring.live_count()
+                    if live > 1 and rpm_hops < live:
                         wait_s = 0.0
+                        print(f"gemini_rpm_hop hops={rpm_hops} live={live}")
                     else:
-                        wait_s = retry_seconds(exc, 20 if attempt < 3 else min(45 * (attempt - 1), 90))
+                        wait_s = min(retry_seconds(exc, 20), 60.0)
+                        rpm_hops = 0
                         print(f"gemini_retry_wait {wait_s}s")
                 else:
                     wait_s = min(8 * (attempt + 1), 60)
@@ -154,9 +159,9 @@ def run_request(app, request_id: str, ring: KeyRing) -> dict[str, str]:
         app.invoke({"request_id": request_id, "messages": prompt, "rounds": 0}, config=config)
     except Exception as exc:
         print(f"graph_error request={request_id} {type(exc).__name__}: {str(exc)[:300]}")
-        return missing_commit_row(request_id)
+        return decide_row(store(), request_id)
     row = committed(request_id)
     if row is None:
-        print(f"no_commit request={request_id}")
-        return missing_commit_row(request_id)
+        print(f"no_commit request={request_id} engine_fallback")
+        return decide_row(store(), request_id)
     return row
