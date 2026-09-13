@@ -979,7 +979,7 @@ def evaluate_state(state: UserState) -> Decision:
 
     methods = set(state.methods)
     change_sets = [{}]
-    no_change_completes = False
+    no_change_immediate = False
 
     def generate_for(changes: dict):
         if "full_payment" in methods:
@@ -1017,8 +1017,10 @@ def evaluate_state(state: UserState) -> Decision:
                 )
 
     generate_for({})
-    no_change_completes = any(c.completes_by_deadline and c.spending_changes == "none" for c in candidates)
-    if not no_change_completes:
+    no_change_immediate = any(
+        c.completes_by_deadline and c.spending_changes == "none" and c.method != "wait" for c in candidates
+    )
+    if not no_change_immediate:
         for changes in _legal_change_sets(state):
             if not changes:
                 continue
