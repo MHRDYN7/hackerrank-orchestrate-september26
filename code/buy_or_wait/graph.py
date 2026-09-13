@@ -36,11 +36,11 @@ class AgentState(TypedDict):
 def _llm(ring: KeyRing):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    key = ring.current()
+    key, model_name = ring.checkout()
     if not key:
         return None
     kwargs = {
-        "model": ring.model,
+        "model": model_name,
         "google_api_key": key,
         "temperature": 0,
         "thinking_level": "high",
@@ -84,17 +84,21 @@ def build_graph(ring: KeyRing):
                 )
                 wait_s = 0.0
                 if is_rpd_error(exc):
-                    switched = ring.note_quota(failed_model)
+                    switched = ring.note_quota(failed_model, ring.last_key)
                     if switched == "exhausted":
                         load_env()
                         switched = ring.activate_new_keys(collect_keys()) or "exhausted"
-                    print(f"gemini_rpd_switch {switched}")
+                    print(f"gemini_rpd_switch {switched} live={ring.live_count()}")
                     if switched == "exhausted":
-                        wait_s = retry_seconds(exc, 20)
-                        print(f"gemini_rpd_exhausted_wait {wait_s}s")
+                        print("gemini_rpd_exhausted_give_up")
+                        slot.release()
+                        break
                 elif is_rpm_error(exc):
-                    wait_s = retry_seconds(exc, 20 if attempt < 3 else min(45 * (attempt - 1), 90))
-                    print(f"gemini_retry_wait {wait_s}s")
+                    if ring.live_count() > 1:
+                        wait_s = 0.0
+                    else:
+                        wait_s = retry_seconds(exc, 20 if attempt < 3 else min(45 * (attempt - 1), 90))
+                        print(f"gemini_retry_wait {wait_s}s")
                 else:
                     wait_s = min(8 * (attempt + 1), 60)
                 slot.release()

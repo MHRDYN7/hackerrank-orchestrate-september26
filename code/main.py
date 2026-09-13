@@ -110,7 +110,7 @@ def score_samples(store, use_agent: bool = True, ids: list[str] | None = None, c
         app = build_graph(ring)
         print(
             f"Scoring {len(ids)} sample requests with {ring.model} "
-            f"(keys={len(ring.keys)}, concurrency={concurrency}, thinking_level=high)",
+            f"(keys={len(ring.keys)} live={ring.live_count()}, concurrency={concurrency}, thinking_level=high)",
             flush=True,
         )
     else:
@@ -209,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preprocess-only", action="store_true")
     parser.add_argument("--engine-only", action="store_true", help="Skip the LangGraph loop")
     parser.add_argument("--ids", default="", help="Comma-separated request ids to score")
-    parser.add_argument("--concurrency", type=int, default=2, help="Parallel requests per batch (capped by GEMINI_MAX_INFLIGHT, default 2)")
+    parser.add_argument("--concurrency", type=int, default=10, help="Parallel requests per batch (capped by GEMINI_MAX_INFLIGHT)")
     args = parser.parse_args(argv)
 
     print("Building store from dataset/ ...", flush=True)

@@ -6,13 +6,7 @@ import threading
 
 
 class GeminiPacer:
-    """No preemptive RPM/TPM sleeps.
-
-    Parallel workers used to stack 5s RPM gaps and 60s TPM waits onto a shared
-    clock, which turned ~40s sequential thinking time into 200s+ wall time.
-    Rate limits are handled by waiting on real 429 responses in graph.py.
-    In-flight Gemini calls are capped so a two-request batch stays near one thinking pass.
-    """
+    """No preemptive RPM/TPM sleeps. Wait only on real 429s in graph.py."""
 
     def wait(self, upcoming_tokens: int = 0) -> None:
         return
@@ -29,10 +23,10 @@ _SLOT_LOCK = threading.Lock()
 
 def max_inflight() -> int:
     try:
-        n = int(os.getenv("GEMINI_MAX_INFLIGHT", "2"))
+        n = int(os.getenv("GEMINI_MAX_INFLIGHT", "10"))
     except ValueError:
-        n = 2
-    return max(1, min(n, 4))
+        n = 10
+    return max(1, min(n, 15))
 
 
 def gemini_slot() -> threading.BoundedSemaphore:
@@ -42,23 +36,6 @@ def gemini_slot() -> threading.BoundedSemaphore:
             _SLOT = threading.BoundedSemaphore(max_inflight())
         return _SLOT
 
-
-class GeminiPacer:
-    """No preemptive RPM/TPM sleeps.
-
-    Parallel workers used to stack 5s RPM gaps and 60s TPM waits onto a shared
-    clock, which turned ~40s sequential thinking time into 200s+ wall time.
-    Rate limits are handled by waiting on real 429 responses in graph.py.
-    """
-
-    def wait(self, upcoming_tokens: int = 0) -> None:
-        return
-
-    def record(self, tokens: int) -> None:
-        return
-
-
-PACER = GeminiPacer()
 
 _MODEL_IN_ERROR = re.compile(r"Error calling model '([^']+)'")
 

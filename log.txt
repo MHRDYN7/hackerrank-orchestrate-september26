@@ -602,3 +602,85 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T11:04:45Z] SESSION START
+
+tool=Cursor
+Repo Root: /workspace
+Branch: cursor/sample-agent-iteration-9b40
+Worktree: /workspace
+Parent Agent: none
+Language: py
+Time Remaining: 1h 26m
+
+
+## [2026-09-13T11:07:13Z] SESSION START
+
+tool=Cursor
+Repo Root: /workspace
+Branch: cursor/sample-agent-iteration-9b40
+Worktree: /workspace
+Parent Agent: none
+Language: py
+Time Remaining: 1h 23m
+
+
+## [2026-09-13T11:08:57Z] SESSION START
+
+tool=Cursor
+Repo Root: /workspace
+Branch: cursor/sample-agent-iteration-9b40
+Worktree: /workspace
+Parent Agent: none
+Language: py
+Time Remaining: 1h 21m
+
+## [2026-09-13T11:09:30Z] Latest-prompt 25 explanations vs gold; wait for keys
+
+User Prompt (verbatim, secrets redacted):
+no, check the older outputs (even if all of 25 are not there), but at least the prompt is latest. If not, then do the 25 after I add the keys. But tell me first. There is no point if you don't run the agent, the reasoning is super important
+
+Agent Response Summary:
+Confirmed the full 25-row agent CSV was produced under the current system prompt (unchanged since the ranking prompt commit). Compared explanations to gold: method-matching rows already use the two-sentence action-plus-minimum pattern. Remaining reasoning failures are wrong decisions (06, 13, 21), not prose. Did not call Gemini. After new keys, rerun the agent 25 (not engine-only) then the 250.
+
+Actions:
+* Compared sample_predictions.csv and /tmp/sample25d.log to current SYSTEM
+* git diff confirmed no prompt change after that 25-run
+* Did not start a new sample or eval run
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
+
+## [2026-09-13T11:21:51Z] SESSION START
+
+tool=Cursor
+Repo Root: /workspace
+Branch: cursor/sample-agent-iteration-9b40
+Worktree: /workspace
+Parent Agent: none
+Language: py
+Time Remaining: 1h 10m
+
+## [2026-09-13T11:21:51Z] Wired GOOGLE_API_KEY_2/3; keys missing here so handoff
+
+User Prompt (verbatim, secrets redacted):
+ok I've added, GOOGLE_API_KEY_2 and GOOGLE_API_KEY_3, if you don't find them just commit and push the changes, I'll ask another agent session to continue the work (do write some instructions for the agent, I'll point it to that)
+
+Agent Response Summary:
+This VM only has the original GOOGLE_API_KEY (len 39). GOOGLE_API_KEY_2 and _3 are not in the environment or any .env. collect_keys now prefers numbered Google keys, round-robins live keys for ~30 RPM, retires a key after 3.5 then 3.1 daily quota, and fails fast instead of sleeping on total exhaustion. Wrote NEXT_AGENT.md for the next session to run agent 25 then the 250-row eval. Did not call Gemini.
+
+Actions:
+* Updated keys.py, ratelimit.py, graph.py, main.py, code/README.md
+* Added NEXT_AGENT.md
+* Did not start sample or eval runs (no fresh keys in this env)
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
