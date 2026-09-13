@@ -154,7 +154,7 @@ def get_context(request_id: Optional[str] = None) -> str:
         "recurring_series": series,
         "regular_spend_candidates": cadences,
         "suggested_extra_event_ids": extras,
-        "spec_ranked": _ranked_packet(request_id, extras),
+        "spec_ranked": _ranked_packet(request_id, ""),
         "requested_amount_plan_text": fmt_plan_amount(req["requested_amount"], str(req.get("requested_amount") or "")),
         "upcoming_pending_or_scheduled": upcoming[:40],
     }
@@ -337,14 +337,6 @@ def _state_for(request_id: str, extra_event_ids: str = ""):
         if extra:
             series.append(extra)
             have.add(eid)
-    if not extra_event_ids.strip():
-        for eid, mode in _parse_extra_event_ids(_suggested_extra_blob(user_id)):
-            if not eid or eid in have:
-                continue
-            extra = series_from_event(st.events.get(user_id, []), eid, user_id, amount_mode=mode)
-            if extra:
-                series.append(extra)
-                have.add(eid)
     return make_state(
         st.profiles[user_id],
         req,
@@ -853,7 +845,7 @@ def commit_decision(
     request_id = resolve_request_id(request_id)
     st = store()
     req = request_record(st, request_id)
-    state = _state_for(request_id, extra_event_ids)
+    state = _state_for(request_id, "")
     spec = evaluate_state(state)
     spec_row = decision_row(spec)
     agent_method = (recommended_payment_method or "").strip()
