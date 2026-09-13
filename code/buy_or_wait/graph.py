@@ -9,7 +9,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from .keys import KeyRing, collect_keys, load_env
-from .ratelimit import PACER, is_rpd_error, is_rpm_error, model_from_exc
+from .ratelimit import PACER, is_rpd_error, is_rpm_error, model_from_exc, retry_seconds
 from .runner import decide_row, request_record
 from .tools import ALL_TOOLS, bind_case, committed, missing_commit_row, store
 from .usage import TRACKER
@@ -48,6 +48,7 @@ def _llm(ring: KeyRing):
         "google_api_key": key,
         "temperature": 0,
         "thinking_level": "high",
+        "max_retries": 1,
     }
     try:
         model = ChatGoogleGenerativeAI(**kwargs)
@@ -90,12 +91,12 @@ def build_graph(ring: KeyRing):
                     if switched.startswith("already_on:"):
                         continue
                     if switched == "exhausted":
-                        wait_s = 65
+                        wait_s = retry_seconds(exc, 20)
                         print(f"gemini_rpd_exhausted_wait {wait_s}s")
                         time.sleep(wait_s)
                     continue
                 if is_rpm_error(exc):
-                    wait_s = 65 if attempt < 3 else min(90 * (attempt - 1), 180)
+                    wait_s = retry_seconds(exc, 20 if attempt < 3 else min(45 * (attempt - 1), 90))
                     print(f"gemini_retry_wait {wait_s}s")
                     time.sleep(wait_s)
                     continue

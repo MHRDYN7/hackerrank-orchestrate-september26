@@ -28,6 +28,18 @@ def model_from_exc(exc: Exception) -> str:
     return match.group(1) if match else ""
 
 
+_RETRY_SECONDS = re.compile(r"retry_delay\s*\{\s*seconds:\s*(\d+)", re.I)
+_RETRY_DELAY_S = re.compile(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s", re.I)
+
+
+def retry_seconds(exc: Exception, fallback: float) -> float:
+    text = str(exc)
+    match = _RETRY_SECONDS.search(text) or _RETRY_DELAY_S.search(text)
+    if match:
+        return max(1.0, float(match.group(1)) + 0.5)
+    return max(1.0, float(fallback))
+
+
 def is_rpm_error(exc: Exception) -> bool:
     text = str(exc).lower()
     if is_rpd_error(exc):
