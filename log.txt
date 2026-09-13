@@ -731,3 +731,23 @@ branch=cursor/agent-25-eval-run-dacb
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+## [2026-09-13T12:16:15Z] 250-row agent eval finished; submit now
+
+User Prompt (verbatim, secrets redacted):
+all done
+
+Agent Response Summary:
+Confirmed the 250-row Gemini agent eval exited 0 at 12:15:12Z. output.csv has 250 unique request ids, valid columns, zero validator errors, and a non-empty explanation on every row. usage_report.md records 1266 Flash-Lite calls and ~10.05M tokens. Committed and pushed so the user can upload immediately.
+
+Actions:
+* Verified /tmp/eval250.log EXIT:0 and Wrote output.csv
+* Validated all 250 rows with buy_or_wait.validate
+* Updated code/evaluation/usage_report.md for both Flash-Lite models
+* git commit and push cursor/agent-25-eval-run-dacb
+
+Context:
+tool=Cursor
+branch=cursor/agent-25-eval-run-dacb
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
