@@ -10,20 +10,31 @@ from langgraph.prebuilt import ToolNode
 
 from .keys import KeyRing, load_env
 from .ratelimit import PACER, is_rpd_error, is_rpm_error
-from .runner import decide_row
-from .tools import ALL_TOOLS, committed, store
+from .runner import decide_row, request_record
+from .tools import ALL_TOOLS, bind_case, committed, store
 from .usage import TRACKER
 
-MAX_ROUNDS = 8
+# Graph-step safety only. Conversation turns are not capped; pending tool calls always run.
+RECURSION_LIMIT = 1000
 
 SYSTEM = """You are the Buy or Wait? financial decision agent.
 
-Goal: for one purchase or payment request, recommend whether the user should pay in full now, pay partially, use a seller installment contract, wait, or not proceed.
+A live case is already bound to this session:
+- request_id: {request_id}
+- user_id: {user_id}
+
+The next message is the user's affordability question verbatim. It will not contain those ids. Do not ask the user for them. When you call tools, pass request_id={request_id} and user_id={user_id}, or omit those arguments and the tools will use the bound case.
+
+Goal: decide whether this user should pay in full now, pay partially, use a seller installment contract, wait, or not proceed.
+
+How to work:
+- Call get_context first (no arguments needed).
+- Use other tools whenever you need raw rows the packet omitted (events, FX, messages, images, linked lifecycles, a single event).
+- Keep calling tools until you can commit. There is no turn budget; finish with commit_decision.
 
 Authority:
 - Deterministic tools own every number: amounts, dates, installment schedules, amount_safe_to_pay, and earliest_date_for_full_payment.
 - Never invent amounts, dates, FX rates, income, expenses, or installment rows.
-- Call get_context first. Use other tools whenever you need raw rows the packet omitted (events, FX, messages, images, linked lifecycles, a single event).
 - Pick one engine candidate_id from evaluate_candidates / get_context and call commit_decision. You may write decision_explanation only.
 
 Evidence rules:
@@ -125,47 +136,39 @@ def build_graph(ring: KeyRing):
 
     def route(state: AgentState):
         last = state["messages"][-1]
-        has_tools = isinstance(last, AIMessage) and bool(getattr(last, "tool_calls", None))
-        # Always execute a pending tool call, including commit_decision, even on the last round.
-        if has_tools:
+        if isinstance(last, AIMessage) and bool(getattr(last, "tool_calls", None)):
             return "tools"
         return END
-
-    def after_tools(state: AgentState):
-        if state.get("rounds", 0) >= MAX_ROUNDS:
-            return END
-        return "agent"
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent)
     graph.add_node("tools", tools)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", route, {"tools": "tools", END: END})
-    graph.add_conditional_edges("tools", after_tools, {"agent": "agent", END: END})
+    graph.add_edge("tools", "agent")
     return graph.compile()
 
 
 def run_request(app, request_id: str, ring: KeyRing) -> dict[str, str]:
     if not ring.has_keys() or app is None:
         return decide_row(store(), request_id)
+    req = request_record(store(), request_id)
+    user_id = req["user_id"]
+    query = req.get("request_text") or ""
+    bind_case(request_id, user_id)
     prompt = [
-        SystemMessage(content=SYSTEM),
-        HumanMessage(
-            content=(
-                f"Decide request_id={request_id}. "
-                "Call get_context first. If ranked_candidates already cover a safe legal plan, "
-                "call commit_decision with that candidate_id and a short grounded explanation. "
-                "Only call extra tools when a raw profile, event, message, image, or FX fact is missing."
-            )
-        ),
+        SystemMessage(content=SYSTEM.format(request_id=request_id, user_id=user_id)),
+        HumanMessage(content=query),
     ]
     config = {
         "run_name": f"buy_or_wait:{request_id}",
         "tags": ["buy-or-wait", "hackerrank"],
-        "metadata": {"request_id": request_id, "model": ring.model},
+        "metadata": {"request_id": request_id, "user_id": user_id, "model": ring.model},
+        "recursion_limit": RECURSION_LIMIT,
     }
     try:
         app.invoke({"request_id": request_id, "messages": prompt, "rounds": 0}, config=config)
-    except Exception:
+    except Exception as exc:
+        print(f"graph_error request={request_id} {type(exc).__name__}: {str(exc)[:300]}")
         return decide_row(store(), request_id)
     return committed(request_id) or decide_row(store(), request_id)

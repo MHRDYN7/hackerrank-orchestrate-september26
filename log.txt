@@ -321,3 +321,26 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T08:18:10Z] Verbatim query message and uncapped agent turns
+
+User Prompt (verbatim, secrets redacted):
+hey verify the results. But I see two issues.
+1. We must put the first user message exactly as the query. I am sure we maybe able to embed the user id somehow. But make the system prompt smart enough to handle that case.
+2. Make sure there is no limit to the number of turns. This caused a run to stop at the tool call and never fully returned the answer
+
+Agent Response Summary:
+Verified the 25-sample LangSmith traces on project hackerrank: 4/25 exact field match, 22/25 committed, and request_10/14/25 hit the 8-round cap without commit_decision. First human message was an agent instruction, not request_text. Bound request_id/user_id in the system prompt, send the raw query as the only human message, made tool ids optional, and removed the turn cap.
+
+Actions:
+* Inspected hackerrank traces for all 25 sample runs
+* Updated graph.py system prompt, HumanMessage, and routing
+* Updated tools.py bind_case and optional request_id/user_id
+* Will re-check request_01 and request_10 traces after the fix
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
