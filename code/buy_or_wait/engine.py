@@ -246,6 +246,50 @@ def build_series(events: list[dict], user_id: str) -> list[Series]:
     return series
 
 
+def series_from_event(events: list[dict], event_id: str, user_id: str) -> Series | None:
+    """Build a recurrence from one event using other settled rows in the same category."""
+    found = None
+    for row in events:
+        if row.get("event_id") == event_id:
+            found = row
+            break
+    if not found or found.get("direction") != "debit":
+        return None
+    cat = found.get("category") or ""
+    rows = [
+        r
+        for r in events
+        if r.get("status") == "settled"
+        and r.get("direction") == "debit"
+        and (r.get("category") or "") == cat
+        and r.get("event_date_p") is not None
+        and r.get("amount_home") is not None
+    ]
+    rows = sorted(rows, key=lambda r: r["event_date_p"])
+    if len(rows) < 2:
+        return None
+    gaps = [(rows[i]["event_date_p"] - rows[i - 1]["event_date_p"]).days for i in range(1, len(rows))]
+    gaps = [g for g in gaps if 0 < g < 60]
+    med = median(gaps) if gaps else 30
+    last = found if found.get("event_date_p") else rows[-1]
+    return Series(
+        series_id=f"{user_id}:from:{event_id}",
+        user_id=user_id,
+        description=last.get("description") or cat,
+        category=cat,
+        direction="debit",
+        amount=float(last.get("amount_home") or 0),
+        last_date=last["event_date_p"],
+        period_days=int(round(med)) if med else 30,
+        monthly=25 <= float(med) <= 36,
+        event_id=event_id,
+        flexibility=last.get("flexibility") or "fixed",
+        min_allowed=last.get("min_allowed"),
+        event_type=last.get("event_type") or "",
+        typical_amount=float(last.get("amount_home") or 0),
+    )
+
+
 def _is_speculative_income(desc: str, category: str = "") -> bool:
     blob = f"{desc} {category}".lower()
     return any(tok in blob for tok in SPECULATIVE_INCOME_TOKENS)

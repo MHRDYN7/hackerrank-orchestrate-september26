@@ -36,9 +36,10 @@ def fmt_amount(value: float | int | None) -> str:
     if value is None:
         return "0"
     q = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    if q == q.to_integral():
-        return str(int(q))
-    return f"{q:.2f}"
+    text = f"{q:.2f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
 
 
 def split_list(value: str | None) -> list[str]:

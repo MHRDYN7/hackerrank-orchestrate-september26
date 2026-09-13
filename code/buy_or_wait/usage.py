@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import threading
 
 
 @dataclass
@@ -12,15 +13,17 @@ class UsageTracker:
     input_tokens: int = 0
     output_tokens: int = 0
     per_request: dict[str, dict] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def record(self, request_id: str, in_tok: int, out_tok: int, calls: int = 1) -> None:
-        self.calls += calls
-        self.input_tokens += in_tok
-        self.output_tokens += out_tok
-        bucket = self.per_request.setdefault(request_id, {"calls": 0, "input": 0, "output": 0})
-        bucket["calls"] += calls
-        bucket["input"] += in_tok
-        bucket["output"] += out_tok
+        with self._lock:
+            self.calls += calls
+            self.input_tokens += in_tok
+            self.output_tokens += out_tok
+            bucket = self.per_request.setdefault(request_id, {"calls": 0, "input": 0, "output": 0})
+            bucket["calls"] += calls
+            bucket["input"] += in_tok
+            bucket["output"] += out_tok
 
     def write_report(self, path, n_requests: int, estimated_rate_per_m: float = 0.10) -> None:
         total = self.input_tokens + self.output_tokens
