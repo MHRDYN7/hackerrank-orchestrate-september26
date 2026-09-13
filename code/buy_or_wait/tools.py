@@ -25,6 +25,8 @@ from .engine import (
     plan_text,
     series_from_event,
     simulate,
+    _change_blob,
+    _legal_change_sets,
 )
 from .formatters import fmt_amount, fmt_plan_amount, iso, parse_date, parse_float
 from .messages import Amendment
@@ -638,6 +640,40 @@ def list_flexible_actions(request_id: Optional[str] = None, extra_event_ids: str
 
 
 @tool
+def try_today_with_changes(request_id: Optional[str] = None, extra_event_ids: str = "") -> str:
+    """Simulate a full payment on request_date for the empty change set and every legal stop/reduce combination. Use this before recommending wait."""
+    request_id = resolve_request_id(request_id)
+    state = _state_for(request_id, extra_event_ids)
+    results = []
+    for changes in _legal_change_sets(state):
+        items = build_forecast(state, changes)
+        ok, trough, breach = simulate(state, items, [(state.request_date, state.requested)])
+        blob = _change_blob(changes)
+        results.append(
+            {
+                "spending_changes_needed": blob,
+                "safe": ok,
+                "trough": trough,
+                "first_breach": iso(breach),
+                "n_changes": 0 if blob == "none" else blob.count("|") + 1,
+            }
+        )
+    safe_sets = [r for r in results if r["safe"]]
+    return json.dumps(
+        {
+            "extra_event_ids": extra_event_ids,
+            "requested_amount": state.requested,
+            "request_date": iso(state.request_date),
+            "deadline": iso(state.deadline),
+            "minimum_balance_to_keep": state.min_balance,
+            "safe_today_sets": safe_sets,
+            "tried": len(results),
+        },
+        default=str,
+    )
+
+
+@tool
 def list_images(user_id: Optional[str] = None) -> str:
     """Return cached image extractions for the bound user. Pass another user_id to filter a different user."""
     user_id = resolve_user_id(user_id)
@@ -857,6 +893,7 @@ ALL_TOOLS = [
     get_linked_events,
     list_series,
     list_flexible_actions,
+    try_today_with_changes,
     list_images,
     get_image_extraction,
     get_exchange_rate,
