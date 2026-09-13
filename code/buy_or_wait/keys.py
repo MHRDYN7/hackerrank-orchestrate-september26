@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -16,46 +17,73 @@ class KeyRing:
     models: list[str] = field(default_factory=lambda: list(FLASH_LITE_MODELS))
     key_index: int = 0
     model_index: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
     def model(self) -> str:
-        return self.models[min(self.model_index, len(self.models) - 1)]
+        with self._lock:
+            return self.models[min(self.model_index, len(self.models) - 1)]
 
     @model.setter
     def model(self, value: str) -> None:
         name = (value or "").strip()
         if name and "flash-lite" not in name:
             return
-        if name in self.models:
-            self.model_index = self.models.index(name)
-        elif name:
-            self.models = [name] + [m for m in self.models if m != name]
-            self.model_index = 0
+        with self._lock:
+            if name in self.models:
+                self.model_index = self.models.index(name)
+            elif name:
+                self.models = [name] + [m for m in self.models if m != name]
+                self.model_index = 0
 
     def current(self) -> str | None:
-        if not self.keys:
-            return None
-        return self.keys[self.key_index % len(self.keys)]
+        with self._lock:
+            if not self.keys:
+                return None
+            return self.keys[self.key_index % len(self.keys)]
 
     def rotate(self) -> str | None:
-        if not self.keys:
-            return None
-        self.key_index = (self.key_index + 1) % len(self.keys)
-        return self.current()
+        with self._lock:
+            if not self.keys:
+                return None
+            self.key_index = (self.key_index + 1) % len(self.keys)
+            return self.keys[self.key_index % len(self.keys)]
+
+    def ingest_keys(self, keys: list[str]) -> int:
+        """Append newly provided keys without dropping the current one."""
+        added = 0
+        with self._lock:
+            for key in keys:
+                if key and key not in self.keys:
+                    self.keys.append(key)
+                    added += 1
+        return added
 
     def note_quota(self) -> str:
-        """3.5 Flash-Lite RPD exhausted -> 3.1 Flash-Lite, same key. Then next key or stop."""
-        if self.model_index < len(self.models) - 1:
-            self.model_index += 1
-            return f"switched_model:{self.model}"
-        if len(self.keys) > 1:
-            self.rotate()
+        """3.5 Flash-Lite RPD exhausted -> 3.1 Flash-Lite, same key. Then next key's 3.5."""
+        with self._lock:
+            if self.model_index < len(self.models) - 1:
+                self.model_index += 1
+                return f"switched_model:{self.models[self.model_index]}"
+            if len(self.keys) > 1:
+                self.key_index = (self.key_index + 1) % len(self.keys)
+                self.model_index = 0
+                return f"rotated_key:{self.models[0]}"
+            return "exhausted"
+
+    def activate_new_keys(self, keys: list[str]) -> str | None:
+        """If the user added keys to the environment, switch to the newest one on 3.5."""
+        added = self.ingest_keys(keys)
+        if not added:
+            return None
+        with self._lock:
+            self.key_index = len(self.keys) - 1
             self.model_index = 0
-            return f"rotated_key:{self.model}"
-        return "exhausted"
+            return f"new_key:{self.models[0]}"
 
     def has_keys(self) -> bool:
-        return bool(self.keys)
+        with self._lock:
+            return bool(self.keys)
 
 
 LANGSMITH_PROJECT_NAME = "hackerrank"
@@ -84,8 +112,7 @@ def load_env() -> None:
         os.environ["LANGCHAIN_ENDPOINT"] = endpoint
 
 
-def load_key_ring() -> KeyRing:
-    load_env()
+def collect_keys() -> list[str]:
     keys: list[str] = []
     for i in range(1, 8):
         val = os.getenv(f"GEMINI_API_KEY_{i}", "").strip()
@@ -95,6 +122,12 @@ def load_key_ring() -> KeyRing:
         single = os.getenv(name, "").strip()
         if single and single not in keys:
             keys.append(single)
+    return keys
+
+
+def load_key_ring() -> KeyRing:
+    load_env()
+    keys = collect_keys()
     preferred = os.getenv("GEMINI_MODEL", "").strip()
     ring = KeyRing(keys=keys)
     if preferred:

@@ -108,7 +108,7 @@ def score_samples(store, use_agent: bool = True, ids: list[str] | None = None, c
         app = build_graph(ring)
         print(
             f"Scoring {len(ids)} sample requests with {ring.model} "
-            f"(concurrency={concurrency}, thinking_level=high)",
+            f"(keys={len(ring.keys)}, concurrency={concurrency}, thinking_level=high)",
             flush=True,
         )
     else:

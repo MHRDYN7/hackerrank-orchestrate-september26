@@ -43,7 +43,7 @@ PACER = GeminiPacer()
 
 def is_rpm_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    if "per day" in text or "perday" in text or "daily" in text:
+    if is_rpd_error(exc):
         return False
     return any(
         tok in text
@@ -53,6 +53,7 @@ def is_rpm_error(exc: Exception) -> bool:
             "ratelimit",
             "per minute",
             "perminute",
+            "per_minute",
             "resource exhausted",
             "resource_exhausted",
             "quota",
@@ -65,4 +66,21 @@ def is_rpm_error(exc: Exception) -> bool:
 
 def is_rpd_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return any(tok in text for tok in ("per day", "perday", "daily", "rpd"))
+    if any(tok in text for tok in ("per minute", "perminute", "per_minute")):
+        return False
+    return any(
+        tok in text
+        for tok in (
+            "per day",
+            "perday",
+            "per_day",
+            "daily",
+            "rpd",
+            "requestsperday",
+            "generate_content_free_tier_requests",
+            "limit: 0",
+            "quota exceeded",
+            "resource exhausted",
+            "resource_exhausted",
+        )
+    )

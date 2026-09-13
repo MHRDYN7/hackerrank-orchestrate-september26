@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from .keys import KeyRing, load_env
+from .keys import KeyRing, collect_keys, load_env
 from .ratelimit import PACER, is_rpd_error, is_rpm_error
 from .runner import decide_row, request_record
 from .tools import ALL_TOOLS, bind_case, committed, missing_commit_row, store
@@ -27,7 +27,7 @@ Reserve pending and scheduled debits. Do not count pending credits, bonuses, com
 
 amount_safe_to_pay is the largest amount that is safe to pay on request_date before optional spending changes. Copy it from compute_capacity or inspect_ledger after you have chosen extra_event_ids, and keep it between 0 and the requested amount. earliest_date_for_full_payment is the first date a single full payment is safe on that same ledger with no spending changes; it equals request_date when the status is affordable_now, and it is empty when no full payment is safe in the ninety-day forecast. A payment plan is chronological YYYY-MM-DD:amount entries separated by |. Installments must copy a supplied installment option exactly. For a full payment or wait, format the requested amount with two decimal places when the requested amount has a decimal, otherwise as a whole number. Partial payment is allowed only when the request allows it, the user will consider it, 0 < amount_safe_to_pay < requested_amount, and the second payment is on or before the deadline; it must be exactly two payments that sum to the requested amount. wait is allowed only if the user considers full_payment. affordable_with_plan means the full request is completed through a partial schedule, installments, or permitted spending changes. Spending changes are at most three stop:event_id or reduce_to:event_id:amount actions, only on non-protected flexible events in categories the user permits, using the event_id of the series you projected.
 
-When more than one safe eligible plan exists, complete the request by the deadline if possible, then prefer no spending changes, then minimize total amount paid, then start earlier, then use fewer payments, then the lowest payment_option_id. Before you recommend wait, call try_today_with_changes with the same extra_event_ids. If safe_today_sets is non-empty, commit the set with the fewest changes as affordable_with_plan and full_payment today rather than waiting. Waiting is only for when that list is empty. A full payment on a later date is recommended_payment_method wait with affordability_status affordable_later, not full_payment and not affordable_with_plan. For partial_payment the two dates must be request_date then earliest_date_for_full_payment, and the two amounts must be amount_safe_to_pay then the remainder. There is no turn budget: keep using tools until you call commit_decision with every output field, the extra_event_ids that built the ledger, and a short grounded explanation of what to pay, when, and why the minimum balance is protected.
+When more than one safe eligible plan exists, complete the request by the deadline if possible, then prefer no spending changes, then minimize total amount paid, then start earlier, then use fewer payments, then the lowest payment_option_id. Before you recommend wait, call try_today_with_changes with the same extra_event_ids. If safe_today_sets is non-empty, commit the set with the fewest changes as affordable_with_plan and full_payment today rather than waiting. Waiting is only for when that list is empty. A full payment on a later date is recommended_payment_method wait with affordability_status affordable_later, not full_payment and not affordable_with_plan. For partial_payment the two dates must be request_date then earliest_date_for_full_payment, and the two amounts must be amount_safe_to_pay then the remainder. There is no turn budget: keep using tools until you call commit_decision with every output field and the extra_event_ids that built the ledger. Write decision_explanation as two short sentences a reviewer can check against the evidence: first the action, amounts, dates, and any stop or reduce in plain words; then that the walk stays at or above the stated minimum_balance_to_keep. Do not narrate every bill.
 """
 
 
@@ -67,7 +67,7 @@ def build_graph(ring: KeyRing):
             return {"messages": [AIMessage(content="engine_only")]}
         msg = None
         last_err: Exception | None = None
-        for attempt in range(8):
+        for attempt in range(16):
             PACER.wait()
             try:
                 msg = llm.invoke(state["messages"])
@@ -79,11 +79,20 @@ def build_graph(ring: KeyRing):
                 print(f"gemini_error model={ring.model} attempt={attempt + 1}: {type(exc).__name__}: {err}")
                 if is_rpd_error(exc):
                     switched = ring.note_quota()
+                    if switched == "exhausted":
+                        load_env()
+                        switched = ring.activate_new_keys(collect_keys()) or "exhausted"
                     print(f"gemini_rpd_switch {switched}")
                     llm = _llm(ring)
-                    if llm is None:
-                        break
-                    time.sleep(min(30 * (attempt + 1), 120))
+                    if llm is None or switched == "exhausted":
+                        wait_s = 65
+                        print(f"gemini_rpd_exhausted_wait {wait_s}s")
+                        time.sleep(wait_s)
+                        llm = _llm(ring)
+                        if llm is None:
+                            break
+                        continue
+                    time.sleep(min(8 * (attempt + 1), 40))
                     continue
                 if is_rpm_error(exc):
                     wait_s = 65 if attempt < 3 else min(90 * (attempt - 1), 180)

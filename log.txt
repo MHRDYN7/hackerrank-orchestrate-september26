@@ -471,3 +471,42 @@ branch=cursor/sample-agent-iteration-9b40
 repo_root=/workspace
 worktree=/workspace
 parent_agent=none
+
+## [2026-09-13T09:50:38Z] Advise: architecture quality vs gold, whether to test-run
+
+User Prompt (verbatim, secrets redacted):
+do you think it's a sufficiently good system right now? What about the agent reasoning vs gold? Would it be a good idea to go for the test run with this architecture?
+
+Agent Response Summary:
+Said the architecture is the right one to keep, but it is not yet a 25/25 scorer. Agent explanations now match gold's decision style on 17/18 and the pay-today shape of 11, while amounts and some cuts still follow our ledger not gold's. Recommended scoring all 25 samples next, and delaying the 250-row eval until that 25-run, because the full eval would burn quota with little iteration time left.
+
+Actions:
+* No code change; assessment only
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
+
+## [2026-09-13T09:59:14Z] Strategy and 25-sample run (RPD switch, AI-judge explanations)
+
+User Prompt (verbatim, secrets redacted):
+ok, so try the 25 samples. note that we have used 411/500 calls for 3.5 flash lite. Once we get 429 for rpd, we need to change the model to 3.1 flash lite. Also, note that the output response will be judged by AI, so we need the results to be well reasoned (given the evidence), but not always exact. You decide the strategy ahead based on all these info and inform me
+btw, no need to cap anything, I'll keep rotating keys and models. So once these 500 are done, I'll still have at least 2500 calls (2 more keys) + non flash-lite models
+
+Agent Response Summary:
+Chose a 25-sample run at concurrency 10, staying on Flash-Lite: 3.5 until daily quota, then 3.1, then any newly ingested keys. Tightened explanations for an AI judge. Did not switch to Pro/non-lite. Started scoring all 25 samples.
+
+Actions:
+* Thread-safe KeyRing, RPD 429 handling, env key ingest
+* Explanation style in system prompt
+* uv run python main.py --samples --concurrency 10
+
+Context:
+tool=Cursor
+branch=cursor/sample-agent-iteration-9b40
+repo_root=/workspace
+worktree=/workspace
+parent_agent=none
