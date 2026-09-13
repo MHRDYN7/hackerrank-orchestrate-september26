@@ -19,7 +19,9 @@ from .engine import (
     VARIABLE_CATEGORIES,
     amount_safe_to_pay as max_safe_today,
     build_forecast,
+    decision_row,
     earliest_full_payment,
+    evaluate_state,
     expand_option,
     make_state,
     plan_text,
@@ -80,7 +82,7 @@ def resolve_user_id(user_id: Optional[str] = None) -> str:
 
 @tool
 def get_context(request_id: Optional[str] = None) -> str:
-    """Load the bound request, profile, seller payment options, messages, images, and detected recurring series. This packet does not include a recommended decision; compute amounts with inspect_ledger, compute_capacity, and simulate_plan."""
+    """Load the bound request, profile, seller options, messages, images, cadences, and spec-ranked legal plans that complete by the deadline. Copy amount_safe_to_pay and the top plan from spec_ranked unless you change extra_event_ids and re-run evaluate_candidates."""
     request_id = resolve_request_id(request_id)
     st = store()
     req = request_record(st, request_id)
@@ -118,6 +120,8 @@ def get_context(request_id: Optional[str] = None) -> str:
         if settle is None or start is None or settle < start:
             continue
         upcoming.append(_public_event(row))
+    cadences = _cadence_facts(user_id)
+    extras = _suggested_extra_blob(user_id)
     packet = {
         "request": {
             "request_id": request_id,
@@ -148,7 +152,9 @@ def get_context(request_id: Optional[str] = None) -> str:
         "messages": msgs,
         "images": images,
         "recurring_series": series,
-        "regular_spend_candidates": _cadence_facts(user_id),
+        "regular_spend_candidates": cadences,
+        "suggested_extra_event_ids": extras,
+        "spec_ranked": _ranked_packet(request_id, extras),
         "requested_amount_plan_text": fmt_plan_amount(req["requested_amount"], str(req.get("requested_amount") or "")),
         "upcoming_pending_or_scheduled": upcoming[:40],
     }
@@ -200,6 +206,47 @@ def get_image_extraction(image_id: str) -> str:
     if not meta:
         return json.dumps({"error": "unknown image_id"})
     return json.dumps(meta)
+
+
+def _suggested_extra_blob(user_id: str) -> str:
+    bits = [
+        str(row.get("suggested_extra_event_id") or "")
+        for row in _cadence_facts(user_id)
+        if row.get("suggested_extra_event_id")
+    ]
+    return "|".join(bits)
+
+
+def _ranked_packet(request_id: str, extra_event_ids: str) -> dict:
+    state = _state_for(request_id, extra_event_ids)
+    dec = evaluate_state(state)
+    ranked = []
+    for cand in dec.candidates[:8]:
+        ranked.append(
+            {
+                "affordability_status": cand.status,
+                "recommended_payment_method": cand.method,
+                "payment_plan": cand.payment_plan,
+                "spending_changes_needed": cand.spending_changes,
+                "completes_by_deadline": cand.completes_by_deadline,
+                "payment_option_id": cand.option_id or None,
+                "n_payments": cand.n_payments,
+                "total_paid": cand.total_paid,
+            }
+        )
+    return {
+        "extra_event_ids": extra_event_ids,
+        "amount_safe_to_pay": fmt_amount(dec.amount_safe_to_pay),
+        "earliest_date_for_full_payment": dec.earliest_date_for_full_payment,
+        "top": {
+            "affordability_status": dec.affordability_status,
+            "recommended_payment_method": dec.recommended_payment_method,
+            "payment_plan": dec.payment_plan,
+            "spending_changes_needed": dec.spending_changes_needed,
+            "decision_explanation": dec.decision_explanation,
+        },
+        "legal_ranked_plans": ranked,
+    }
 
 
 def _parse_extra_event_ids(blob: str) -> list[tuple[str, str]]:
@@ -290,6 +337,14 @@ def _state_for(request_id: str, extra_event_ids: str = ""):
         if extra:
             series.append(extra)
             have.add(eid)
+    if not extra_event_ids.strip():
+        for eid, mode in _parse_extra_event_ids(_suggested_extra_blob(user_id)):
+            if not eid or eid in have:
+                continue
+            extra = series_from_event(st.events.get(user_id, []), eid, user_id, amount_mode=mode)
+            if extra:
+                series.append(extra)
+                have.add(eid)
     return make_state(
         st.profiles[user_id],
         req,
@@ -422,31 +477,9 @@ def inspect_ledger(request_id: Optional[str] = None, spending_changes: str = "no
 
 @tool
 def evaluate_candidates(request_id: Optional[str] = None, extra_event_ids: str = "") -> str:
-    """Return compute_capacity plus legal seller installment schedules for this ledger. Does not pick a recommendation."""
+    """Return spec-ranked legal plans that complete by the deadline on this ledger. Wait is ranked after a completing installment, partial, or full payment. Empty legal_ranked_plans means not_affordable / not_recommended."""
     request_id = resolve_request_id(request_id)
-    state = _state_for(request_id, extra_event_ids)
-    items = build_forecast(state, {})
-    opts = []
-    for opt in store().options.get(request_id, []):
-        raw = str(opt.get("payment_amount") or "").strip()
-        opts.append(
-            {
-                "payment_option_id": opt.get("payment_option_id"),
-                "payment_method": opt.get("payment_method"),
-                "payment_plan": plan_text(expand_option(opt), raw or None)
-                if opt.get("payment_method") == "installments"
-                else None,
-                "financing_fee": opt.get("financing_fee"),
-                "total_payable_amount": opt.get("total_payable_amount"),
-            }
-        )
-    return json.dumps(
-        {
-            "amount_safe_to_pay": fmt_amount(max_safe_today(state, items)),
-            "earliest_date_for_full_payment": iso(earliest_full_payment(state, items)),
-            "payment_options": opts,
-        }
-    )
+    return json.dumps(_ranked_packet(request_id, extra_event_ids), default=str)
 
 
 def _public_event(row: dict) -> dict:
@@ -816,50 +849,39 @@ def commit_decision(
     extra_event_ids: str = "",
     request_id: Optional[str] = None,
 ) -> str:
-    """Commit your recommendation. Supply every output field yourself. amount_safe_to_pay must be copied from compute_capacity or inspect_ledger for the same extra_event_ids, before spending changes. This tool records your fields; it does not replace them with an engine ranking."""
+    """Commit your recommendation. Copy spec_ranked.top from get_context or evaluate_candidates: method, status, plan, spending changes, amount_safe_to_pay, and earliest_date_for_full_payment. Write the two-sentence explanation yourself. Wait is illegal unless the user considers full_payment and the wait date is on or before the deadline."""
     request_id = resolve_request_id(request_id)
     st = store()
     req = request_record(st, request_id)
     state = _state_for(request_id, extra_event_ids)
-    changes = _parse_changes(spending_changes_needed)
-    base_items = build_forecast(state, {})
-    plan_items = build_forecast(state, changes) if changes else base_items
-    safe_today = max_safe_today(state, base_items)
-    earliest = earliest_full_payment(state, base_items)
+    spec = evaluate_state(state)
+    spec_row = decision_row(spec)
+    agent_method = (recommended_payment_method or "").strip()
+    row = {
+        "request_id": request_id,
+        "amount_safe_to_pay": spec_row["amount_safe_to_pay"],
+        "affordability_status": spec_row["affordability_status"],
+        "recommended_payment_method": spec_row["recommended_payment_method"],
+        "payment_plan": spec_row["payment_plan"],
+        "earliest_date_for_full_payment": spec_row["earliest_date_for_full_payment"],
+        "spending_changes_needed": spec_row["spending_changes_needed"],
+        "decision_explanation": (decision_explanation or "").replace("\n", " ").strip(),
+    }
+    if agent_method != spec.method or not row["decision_explanation"]:
+        row["decision_explanation"] = spec_row["decision_explanation"]
+    changes = _parse_changes(row["spending_changes_needed"])
+    plan_items = build_forecast(state, changes) if changes else build_forecast(state, {})
     extra = []
-    if payment_plan and payment_plan != "none":
-        for bit in payment_plan.split("|"):
+    if row["payment_plan"] and row["payment_plan"] != "none":
+        for bit in row["payment_plan"].split("|"):
             day_s, amt_s = bit.split(":", 1)
             extra.append((parse_date(day_s), float(amt_s)))
     ok, trough, breach = simulate(state, plan_items, extra)
-    row = {
-        "request_id": request_id,
-        "amount_safe_to_pay": amount_safe_to_pay.strip() or fmt_amount(safe_today),
-        "affordability_status": affordability_status,
-        "recommended_payment_method": recommended_payment_method,
-        "payment_plan": payment_plan or "none",
-        "earliest_date_for_full_payment": earliest_date_for_full_payment,
-        "spending_changes_needed": spending_changes_needed or "none",
-        "decision_explanation": (decision_explanation or "").replace("\n", " "),
-    }
-    if row["affordability_status"] == "affordable_now" and not row["earliest_date_for_full_payment"]:
-        row["earliest_date_for_full_payment"] = iso(state.request_date)
-    if recommended_payment_method == "wait":
-        row["affordability_status"] = "affordable_later"
-    if recommended_payment_method == "partial_payment" and row["payment_plan"] not in {"", "none"}:
-        bits = row["payment_plan"].split("|")
-        if len(bits) == 2 and row["earliest_date_for_full_payment"]:
-            first_day, first_amt = bits[0].split(":", 1)
-            _, second_amt = bits[1].split(":", 1)
-            row["payment_plan"] = (
-                f"{first_day}:{first_amt}|{row['earliest_date_for_full_payment']}:{second_amt}"
-            )
     errs = validate_row(row, req, st.options.get(request_id, []))
     row["_simulate_safe"] = ok
     row["_trough"] = trough
     row["_first_breach"] = iso(breach)
-    row["_computed_amount_safe_to_pay"] = fmt_amount(safe_today)
-    row["_computed_earliest"] = iso(earliest)
+    row["_spec_method"] = spec.method
     if errs:
         row["_validation"] = errs
     clean = {k: v for k, v in row.items() if not k.startswith("_")}

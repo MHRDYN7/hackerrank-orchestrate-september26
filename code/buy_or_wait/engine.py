@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from calendar import monthrange
 from statistics import median
 
-from .formatters import fmt_amount, iso, money, parse_bool, parse_date, parse_float, split_list
+from .formatters import fmt_amount, fmt_plan_amount, iso, money, parse_bool, parse_date, parse_float, split_list
 from .fx import FxBook
 from .messages import Amendment
 
@@ -938,19 +938,32 @@ def evaluate_state(state: UserState) -> Decision:
     safe_today = amount_safe_to_pay(state, base_items)
     earliest = earliest_full_payment(state, base_items)
     candidates: list[Candidate] = []
+    req_style = str(state.request.get("requested_amount") or "")
 
-    def consider(method: str, payments: list[tuple[date, float]], changes: dict, option_id: str = "") -> None:
+    def consider(
+        method: str,
+        payments: list[tuple[date, float]],
+        changes: dict,
+        option_id: str = "",
+        amount_text: str | None = None,
+    ) -> None:
         items = base_items if not changes else build_forecast(state, changes)
         ok, _, _ = simulate(state, items, [(d, a) for d, a in payments])
         last_pay = payments[-1][0] if payments else None
         completes = bool(last_pay and last_pay <= state.deadline)
         total = sum(a for _, a in payments)
+        if method == "installments":
+            plan = plan_text(payments, amount_text)
+        elif method in {"full_payment", "wait"} and payments:
+            plan = plan_text(payments, fmt_plan_amount(payments[0][1], req_style))
+        else:
+            plan = plan_text(payments)
         cand = Candidate(
             candidate_id=f"{method}:{option_id}:{_change_blob(changes)}",
             method=method,
             status=_status_for(method, changes, state.request_date, payments),
             payments=payments,
-            payment_plan=plan_text(payments),
+            payment_plan=plan,
             spending_changes=_change_blob(changes),
             total_paid=total,
             starts=payments[0][0] if payments else None,
@@ -960,7 +973,8 @@ def evaluate_state(state: UserState) -> Decision:
             safe=ok,
         )
         cand.explanation = explain(state, cand)
-        if ok:
+        # A legal plan must finish by the deadline. Late but cash-safe schedules are not recommended.
+        if ok and completes:
             candidates.append(cand)
 
     methods = set(state.methods)
@@ -993,7 +1007,14 @@ def evaluate_state(state: UserState) -> Decision:
                 months = installment_months(opt)
                 if state.max_inst_months is not None and months > state.max_inst_months:
                     continue
-                consider("installments", expand_option(opt), changes, opt["payment_option_id"])
+                pays = expand_option(opt)
+                consider(
+                    "installments",
+                    pays,
+                    changes,
+                    opt["payment_option_id"],
+                    opt.get("_amount_text"),
+                )
 
     generate_for({})
     no_change_completes = any(c.completes_by_deadline and c.spending_changes == "none" for c in candidates)
@@ -1003,10 +1024,10 @@ def evaluate_state(state: UserState) -> Decision:
                 continue
             if "full_payment" in methods:
                 consider("full_payment", [(state.request_date, state.requested)], changes)
-            if "wait" or "full_payment" in methods:
+            if "full_payment" in methods:
                 items = build_forecast(state, changes)
                 early = earliest_full_payment(state, items)
-                if early and early > state.request_date and "full_payment" in methods:
+                if early and early > state.request_date:
                     consider("wait", [(early, state.requested)], changes)
 
     def _change_cut(blob: str) -> float:
@@ -1039,8 +1060,9 @@ def evaluate_state(state: UserState) -> Decision:
         return (lifestyle, len(bits))
 
     def rank_key(c: Candidate):
+        # Completing installment/partial/full beats wait even when wait is cheaper.
         return (
-            0 if c.completes_by_deadline else 1,
+            0 if c.method != "wait" else 1,
             0 if c.spending_changes == "none" else 1,
             c.total_paid,
             c.starts.toordinal() if c.starts else 10**9,

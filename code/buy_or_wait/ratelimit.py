@@ -1,6 +1,46 @@
 from __future__ import annotations
 
+import os
 import re
+import threading
+
+
+class GeminiPacer:
+    """No preemptive RPM/TPM sleeps.
+
+    Parallel workers used to stack 5s RPM gaps and 60s TPM waits onto a shared
+    clock, which turned ~40s sequential thinking time into 200s+ wall time.
+    Rate limits are handled by waiting on real 429 responses in graph.py.
+    In-flight Gemini calls are capped so a two-request batch stays near one thinking pass.
+    """
+
+    def wait(self, upcoming_tokens: int = 0) -> None:
+        return
+
+    def record(self, tokens: int) -> None:
+        return
+
+
+PACER = GeminiPacer()
+
+_SLOT: threading.BoundedSemaphore | None = None
+_SLOT_LOCK = threading.Lock()
+
+
+def max_inflight() -> int:
+    try:
+        n = int(os.getenv("GEMINI_MAX_INFLIGHT", "2"))
+    except ValueError:
+        n = 2
+    return max(1, min(n, 4))
+
+
+def gemini_slot() -> threading.BoundedSemaphore:
+    global _SLOT
+    with _SLOT_LOCK:
+        if _SLOT is None:
+            _SLOT = threading.BoundedSemaphore(max_inflight())
+        return _SLOT
 
 
 class GeminiPacer:

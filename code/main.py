@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from buy_or_wait.graph import build_graph, run_request
 from buy_or_wait.keys import load_key_ring
 from buy_or_wait.paths import OUTPUT_PATH, SAMPLE_PREDICTIONS_PATH, USAGE_REPORT_PATH
 from buy_or_wait.preprocess import build_store
+from buy_or_wait.ratelimit import max_inflight
 from buy_or_wait.runner import decide_row
 from buy_or_wait.tools import bind_store
 from buy_or_wait.usage import TRACKER
@@ -124,21 +126,26 @@ def score_samples(store, use_agent: bool = True, ids: list[str] | None = None, c
 
     exact = 0
     results: dict[str, tuple[dict, dict]] = {}
-    workers = max(1, concurrency if app is not None else 1)
-    if workers == 1:
-        for rid in ids:
-            _, pred, gold = one(rid)
-            results[rid] = (pred, gold)
-            if _print_score(rid, pred, gold):
+    workers = max(1, min(concurrency if app is not None else 1, max_inflight()))
+    print(f"batch_size={workers} (cap GEMINI_MAX_INFLIGHT)", flush=True)
+    for start in range(0, len(ids), workers):
+        chunk = ids[start : start + workers]
+        t0 = time.monotonic()
+        if workers == 1:
+            _, pred, gold = one(chunk[0])
+            results[chunk[0]] = (pred, gold)
+            if _print_score(chunk[0], pred, gold):
                 exact += 1
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = {pool.submit(one, rid): rid for rid in ids}
-            for fut in as_completed(futs):
-                rid, pred, gold = fut.result()
-                results[rid] = (pred, gold)
-                if _print_score(rid, pred, gold):
-                    exact += 1
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = {pool.submit(one, rid): rid for rid in chunk}
+                for fut in as_completed(futs):
+                    rid, pred, gold = fut.result()
+                    results[rid] = (pred, gold)
+                    if _print_score(rid, pred, gold):
+                        exact += 1
+        elapsed = time.monotonic() - t0
+        print(f"batch {start // workers + 1} n={len(chunk)} wall_s={elapsed:.1f}", flush=True)
     print(f"Exact field match (except explanation): {exact}/{len(ids)}", flush=True)
     field_hits = {f: 0 for f in SCORE_FIELDS}
     for rid in ids:
@@ -177,16 +184,22 @@ def run_eval(store, use_agent: bool, concurrency: int = 10) -> list[dict[str, st
             print(f"invalid_row {rid} {errs}", flush=True)
         return rid, row
 
-    workers = max(1, concurrency if app is not None else 1)
+    workers = max(1, min(concurrency if app is not None else 1, max_inflight()))
     done = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = {pool.submit(one, rid): rid for rid in ids}
-        for fut in as_completed(futs):
-            rid, row = fut.result()
-            rows_by_id[rid] = row
-            done += 1
-            if done % 10 == 0 or done == len(ids):
-                print(f"processed {done}/{len(ids)}", flush=True)
+    print(f"eval_batch_size={workers} n={len(ids)}", flush=True)
+    for start in range(0, len(ids), workers):
+        chunk = ids[start : start + workers]
+        t0 = time.monotonic()
+        with ThreadPoolExecutor(max_workers=len(chunk)) as pool:
+            futs = {pool.submit(one, rid): rid for rid in chunk}
+            for fut in as_completed(futs):
+                rid, row = fut.result()
+                rows_by_id[rid] = row
+                done += 1
+                if done % 10 == 0 or done == len(ids):
+                    print(f"processed {done}/{len(ids)}", flush=True)
+        elapsed = time.monotonic() - t0
+        print(f"batch {start // workers + 1} n={len(chunk)} wall_s={elapsed:.1f}", flush=True)
     return [rows_by_id[rid] for rid in ids]
 
 
@@ -196,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preprocess-only", action="store_true")
     parser.add_argument("--engine-only", action="store_true", help="Skip the LangGraph loop")
     parser.add_argument("--ids", default="", help="Comma-separated request ids to score")
-    parser.add_argument("--concurrency", type=int, default=10, help="Parallel requests (429s are retried)")
+    parser.add_argument("--concurrency", type=int, default=2, help="Parallel requests per batch (capped by GEMINI_MAX_INFLIGHT, default 2)")
     args = parser.parse_args(argv)
 
     print("Building store from dataset/ ...", flush=True)
