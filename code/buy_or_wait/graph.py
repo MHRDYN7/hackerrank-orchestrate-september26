@@ -9,7 +9,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from .keys import KeyRing, collect_keys, load_env
-from .ratelimit import PACER, is_rpd_error, is_rpm_error
+from .ratelimit import PACER, is_rpd_error, is_rpm_error, model_from_exc
 from .runner import decide_row, request_record
 from .tools import ALL_TOOLS, bind_case, committed, missing_commit_row, store
 from .usage import TRACKER
@@ -62,12 +62,12 @@ def build_graph(ring: KeyRing):
     tools = ToolNode(ALL_TOOLS)
 
     def agent(state: AgentState):
-        llm = _llm(ring)
-        if llm is None:
-            return {"messages": [AIMessage(content="engine_only")]}
         msg = None
         last_err: Exception | None = None
         for attempt in range(16):
+            llm = _llm(ring)
+            if llm is None:
+                return {"messages": [AIMessage(content="engine_only")]}
             PACER.wait()
             try:
                 msg = llm.invoke(state["messages"])
@@ -75,24 +75,24 @@ def build_graph(ring: KeyRing):
                 break
             except Exception as exc:
                 last_err = exc
+                failed_model = model_from_exc(exc) or ring.model
                 err = str(exc)[:300]
-                print(f"gemini_error model={ring.model} attempt={attempt + 1}: {type(exc).__name__}: {err}")
+                print(
+                    f"gemini_error ring={ring.model} called={failed_model} "
+                    f"attempt={attempt + 1}: {type(exc).__name__}: {err}"
+                )
                 if is_rpd_error(exc):
-                    switched = ring.note_quota()
+                    switched = ring.note_quota(failed_model)
                     if switched == "exhausted":
                         load_env()
                         switched = ring.activate_new_keys(collect_keys()) or "exhausted"
                     print(f"gemini_rpd_switch {switched}")
-                    llm = _llm(ring)
-                    if llm is None or switched == "exhausted":
+                    if switched.startswith("already_on:"):
+                        continue
+                    if switched == "exhausted":
                         wait_s = 65
                         print(f"gemini_rpd_exhausted_wait {wait_s}s")
                         time.sleep(wait_s)
-                        llm = _llm(ring)
-                        if llm is None:
-                            break
-                        continue
-                    time.sleep(min(8 * (attempt + 1), 40))
                     continue
                 if is_rpm_error(exc):
                     wait_s = 65 if attempt < 3 else min(90 * (attempt - 1), 180)

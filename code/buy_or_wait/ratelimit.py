@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 class GeminiPacer:
     """No preemptive RPM/TPM sleeps.
@@ -17,6 +19,13 @@ class GeminiPacer:
 
 
 PACER = GeminiPacer()
+
+_MODEL_IN_ERROR = re.compile(r"Error calling model '([^']+)'")
+
+
+def model_from_exc(exc: Exception) -> str:
+    match = _MODEL_IN_ERROR.search(str(exc))
+    return match.group(1) if match else ""
 
 
 def is_rpm_error(exc: Exception) -> bool:

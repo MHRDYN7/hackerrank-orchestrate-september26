@@ -59,9 +59,17 @@ class KeyRing:
                     added += 1
         return added
 
-    def note_quota(self) -> str:
-        """3.5 Flash-Lite RPD exhausted -> 3.1 Flash-Lite, same key. Then next key's 3.5."""
+    def note_quota(self, failed_model: str | None = None) -> str:
+        """3.5 Flash-Lite RPD exhausted -> 3.1 Flash-Lite, same key. Then next key's 3.5.
+
+        Parallel workers can still be invoking the previous model after a switch.
+        Those stale 429s must not advance past a model that has not been tried.
+        """
+        failed = (failed_model or "").strip()
         with self._lock:
+            current = self.models[min(self.model_index, len(self.models) - 1)]
+            if failed and failed != current:
+                return f"already_on:{current}"
             if self.model_index < len(self.models) - 1:
                 self.model_index += 1
                 return f"switched_model:{self.models[self.model_index]}"
