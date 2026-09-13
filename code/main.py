@@ -48,13 +48,15 @@ def score_samples(store, use_agent: bool = True) -> None:
         else:
             pred = decide_row(store, rid)
         fields = [
+            "amount_safe_to_pay",
             "affordability_status",
             "recommended_payment_method",
             "payment_plan",
             "earliest_date_for_full_payment",
             "spending_changes_needed",
         ]
-        match = all(str(pred.get(f, "")) == str(gold.get(f, "")) for f in fields)
+        mismatches = [f for f in fields if str(pred.get(f, "")) != str(gold.get(f, ""))]
+        match = not mismatches
         if match:
             exact += 1
             flag = "OK"
@@ -67,9 +69,10 @@ def score_samples(store, use_agent: bool = True) -> None:
             f"{gold['amount_safe_to_pay']},{gold['earliest_date_for_full_payment']},{gold['spending_changes_needed']})"
         )
         if flag == "MISS":
+            print(f"    mismatches={mismatches}")
             print(f"    pred_plan={pred['payment_plan']}")
             print(f"    gold_plan={gold['payment_plan']}")
-    print(f"Exact categorical match: {exact}/{len(ids)}")
+    print(f"Exact field match (except explanation): {exact}/{len(ids)}")
 
 
 def run_eval(store, use_agent: bool) -> list[dict[str, str]]:

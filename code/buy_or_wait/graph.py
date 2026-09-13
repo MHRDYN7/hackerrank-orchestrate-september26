@@ -14,6 +14,8 @@ from .runner import decide_row
 from .tools import ALL_TOOLS, committed, store
 from .usage import TRACKER
 
+MAX_ROUNDS = 8
+
 SYSTEM = """You are the Buy or Wait? financial decision agent.
 
 Goal: for one purchase or payment request, recommend whether the user should pay in full now, pay partially, use a seller installment contract, wait, or not proceed.
@@ -122,19 +124,24 @@ def build_graph(ring: KeyRing):
         return {"messages": [msg], "rounds": state.get("rounds", 0) + 1}
 
     def route(state: AgentState):
-        if state.get("rounds", 0) >= 4:
-            return END
         last = state["messages"][-1]
-        if isinstance(last, AIMessage) and last.tool_calls:
+        has_tools = isinstance(last, AIMessage) and bool(getattr(last, "tool_calls", None))
+        # Always execute a pending tool call, including commit_decision, even on the last round.
+        if has_tools:
             return "tools"
         return END
+
+    def after_tools(state: AgentState):
+        if state.get("rounds", 0) >= MAX_ROUNDS:
+            return END
+        return "agent"
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent)
     graph.add_node("tools", tools)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", route, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
+    graph.add_conditional_edges("tools", after_tools, {"agent": "agent", END: END})
     return graph.compile()
 
 
@@ -146,8 +153,9 @@ def run_request(app, request_id: str, ring: KeyRing) -> dict[str, str]:
         HumanMessage(
             content=(
                 f"Decide request_id={request_id}. "
-                "Start with get_context. Inspect raw rows with tools if anything is unclear. "
-                "Then evaluate_candidates if needed and commit_decision."
+                "Call get_context first. If ranked_candidates already cover a safe legal plan, "
+                "call commit_decision with that candidate_id and a short grounded explanation. "
+                "Only call extra tools when a raw profile, event, message, image, or FX fact is missing."
             )
         ),
     ]
