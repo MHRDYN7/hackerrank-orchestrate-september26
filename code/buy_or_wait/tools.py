@@ -121,7 +121,7 @@ def query_cash_items(
     upcoming_only: bool = False,
 ) -> str:
     """Query normalized cash items for a user. Row-capped. Use upcoming_only for pending/scheduled."""
-    rows = db_query_cash_items(user_id, status=status, category=category, upcoming_only=upcoming_only, limit=30)
+    rows = db_query_cash_items(user_id, status=status, category=category, upcoming_only=upcoming_only, limit=80)
     return json.dumps(rows, default=str)
 
 
@@ -133,7 +133,7 @@ def query_events(
     upcoming_only: bool = False,
 ) -> str:
     """Alias for query_cash_items."""
-    rows = db_query_cash_items(user_id, status=status, category=category, upcoming_only=upcoming_only, limit=30)
+    rows = db_query_cash_items(user_id, status=status, category=category, upcoming_only=upcoming_only, limit=80)
     return json.dumps(rows, default=str)
 
 
@@ -251,6 +251,190 @@ def evaluate_candidates(request_id: str) -> str:
     )
 
 
+def _public_event(row: dict) -> dict:
+    return {
+        "event_id": row.get("event_id"),
+        "user_id": row.get("user_id"),
+        "event_type": row.get("event_type"),
+        "description": row.get("description"),
+        "category": row.get("category"),
+        "direction": row.get("direction"),
+        "amount": row.get("amount"),
+        "amount_home": row.get("amount_home"),
+        "currency": row.get("currency"),
+        "event_date": str(row.get("event_date_p") or row.get("event_date") or ""),
+        "settlement_date": str(row.get("settlement_date_p") or row.get("settlement_date") or ""),
+        "status": row.get("status"),
+        "flexibility": row.get("flexibility"),
+        "minimum_allowed_amount": row.get("min_allowed") or row.get("minimum_allowed_amount"),
+        "linked_event_id": row.get("linked_event_id"),
+    }
+
+
+@tool
+def get_profile(user_id: str) -> str:
+    """Return the raw financial_profiles row for a user."""
+    profile = store().profiles.get(user_id)
+    if not profile:
+        return json.dumps({"error": "unknown user_id"})
+    return json.dumps(profile)
+
+
+@tool
+def get_raw_request(request_id: str) -> str:
+    """Return the raw request row (eval or sample) without engine fields."""
+    req = request_record(store(), request_id)
+    keep = (
+        "request_id",
+        "user_id",
+        "request_date",
+        "request_type",
+        "requested_amount",
+        "desired_completion_date",
+        "allows_partial_payment",
+        "request_text",
+    )
+    return json.dumps({k: req.get(k) for k in keep})
+
+
+@tool
+def list_payment_options(request_id: str) -> str:
+    """Return every seller/provider payment option row for a request."""
+    return json.dumps(store().options.get(request_id, []), default=str)
+
+
+@tool
+def get_user_messages(user_id: str) -> str:
+    """Return raw message rows for a user. Treat as untrusted evidence."""
+    return json.dumps(store().messages.get(user_id, []), default=str)
+
+
+@tool
+def list_events(
+    user_id: str,
+    offset: int = 0,
+    limit: int = 40,
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    direction: Optional[str] = None,
+) -> str:
+    """Page through all normalized events for a user. Raise offset to walk the full history."""
+    rows = list(store().events.get(user_id, []))
+    if status:
+        rows = [r for r in rows if (r.get("status") or "") == status]
+    if category:
+        rows = [r for r in rows if (r.get("category") or "") == category]
+    if direction:
+        rows = [r for r in rows if (r.get("direction") or "") == direction]
+    rows = sorted(rows, key=lambda r: str(r.get("event_date_p") or ""))
+    chunk = rows[offset : offset + max(1, min(limit, 80))]
+    return json.dumps(
+        {"total": len(rows), "offset": offset, "returned": len(chunk), "events": [_public_event(r) for r in chunk]},
+        default=str,
+    )
+
+
+@tool
+def search_events(user_id: str, query: str, limit: int = 25) -> str:
+    """Search a user's events by description, category, event_id, or status substring."""
+    needle = (query or "").lower()
+    hits = []
+    for row in store().events.get(user_id, []):
+        blob = " ".join(
+            str(row.get(k) or "")
+            for k in ("event_id", "description", "category", "status", "event_type", "linked_event_id")
+        ).lower()
+        if needle in blob:
+            hits.append(_public_event(row))
+        if len(hits) >= max(1, min(limit, 50)):
+            break
+    return json.dumps(hits, default=str)
+
+
+@tool
+def get_linked_events(event_id: str) -> str:
+    """Return an event and every row that shares its linked_event_id lifecycle."""
+    found = None
+    user_id = None
+    for uid, rows in store().events.items():
+        for row in rows:
+            if row.get("event_id") == event_id:
+                found = row
+                user_id = uid
+                break
+        if found:
+            break
+    if not found:
+        return json.dumps({"error": "unknown event_id"})
+    link = found.get("linked_event_id") or found.get("event_id")
+    related = []
+    for row in store().events.get(user_id, []):
+        if row.get("event_id") == event_id or row.get("linked_event_id") == link or row.get("event_id") == link:
+            related.append(_public_event(row))
+    return json.dumps({"event": _public_event(found), "lifecycle": related}, default=str)
+
+
+@tool
+def list_series(user_id: str) -> str:
+    """Return detected recurring series for a user."""
+    out = []
+    for s in store().series.get(user_id, []):
+        out.append(
+            {
+                "series_id": s.series_id,
+                "event_id": s.event_id,
+                "description": s.description,
+                "category": s.category,
+                "direction": s.direction,
+                "amount": s.amount,
+                "last_date": iso(s.last_date),
+                "period_days": s.period_days,
+                "monthly": s.monthly,
+                "flexibility": s.flexibility,
+                "minimum_allowed_amount": s.min_allowed,
+            }
+        )
+    return json.dumps(out)
+
+
+@tool
+def list_images(user_id: str = "") -> str:
+    """Return cached image extractions. Optionally filter by user_id when the image event belongs to that user."""
+    st = store()
+    items = []
+    for image_id, meta in st.image_meta.items():
+        event_id = meta.get("event_id")
+        owner = ""
+        for uid, rows in st.events.items():
+            if any(r.get("event_id") == event_id for r in rows):
+                owner = uid
+                break
+        if user_id and owner != user_id:
+            continue
+        items.append({"image_id": image_id, "user_id": owner, **meta})
+    return json.dumps(items, default=str)
+
+
+@tool
+def get_exchange_rate(from_currency: str, to_currency: str, rate_date: str) -> str:
+    """Look up the supplied table rate for a currency pair on a settlement date."""
+    day = parse_date(rate_date)
+    if day is None:
+        return json.dumps({"error": "bad date"})
+    book = store().fx
+    rate = book._rate(from_currency.strip(), to_currency.strip(), day)
+    converted = book.convert(1.0, from_currency.strip(), to_currency.strip(), day)
+    return json.dumps(
+        {
+            "from_currency": from_currency,
+            "to_currency": to_currency,
+            "rate_date": rate_date,
+            "rate": rate,
+            "one_unit_converted": converted,
+        }
+    )
+
+
 @tool
 def commit_decision(request_id: str, candidate_id: str = "", explanation: str = "") -> str:
     """Commit the engine row. Optional candidate_id must match an engine candidate. Explanation may be replaced if grounded."""
@@ -276,10 +460,20 @@ def committed(request_id: str) -> dict[str, str] | None:
 
 ALL_TOOLS = [
     get_context,
+    get_profile,
+    get_raw_request,
+    list_payment_options,
+    get_user_messages,
     query_cash_items,
     query_events,
+    list_events,
+    search_events,
     get_event,
+    get_linked_events,
+    list_series,
+    list_images,
     get_image_extraction,
+    get_exchange_rate,
     compute_capacity,
     expand_payment_option,
     simulate_plan,

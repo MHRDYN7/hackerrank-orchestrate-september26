@@ -90,6 +90,7 @@ class Series:
     flexibility: str
     min_allowed: float | None
     event_type: str
+    typical_amount: float = 0.0
 
 
 @dataclass
@@ -207,7 +208,10 @@ def build_series(events: list[dict], user_id: str) -> list[Series]:
         last = rows[-1]
         cat_l = cat
         flex = last.get("flexibility") or "fixed"
-        if "weekend food" in desc.lower() and flex != "fixed":
+        amounts = [float(r["amount_home"]) for r in rows if r.get("amount_home") is not None]
+        typical_amount = median(amounts) if amounts else float(last["amount_home"])
+        # Only treat weekend-food as weekly when the gaps actually look weekly.
+        if "weekend food" in desc.lower() and flex != "fixed" and 5 <= med <= 14:
             weekly = True
             monthly = False
         if not monthly and not weekly:
@@ -236,6 +240,7 @@ def build_series(events: list[dict], user_id: str) -> list[Series]:
                 flexibility=last.get("flexibility") or "fixed",
                 min_allowed=last.get("min_allowed"),
                 event_type=last.get("event_type") or "",
+                typical_amount=float(typical_amount),
             )
         )
     return series
@@ -403,6 +408,11 @@ def build_forecast(
             amount = amount * (1 + state.amendment.rent_increase_pct / 100.0)
 
         dates = _next_dates(ser.last_date, ser.monthly, ser.period_days, start, end)
+        if ser.direction == "credit":
+            raw_next = add_months(ser.last_date, 1) if ser.monthly else ser.last_date + timedelta(days=ser.period_days)
+            if raw_next < start:
+                # A payday was already missed; do not invent a restarted cadence.
+                dates = []
         if ser.direction != "credit" and not any(
             it.category == "salary" and it.amount > 0 for it in items
         ) and not (
@@ -455,7 +465,7 @@ def build_forecast(
                 if first_salary_date is not None and d == first_salary_date:
                     pay_amt = state.amendment.salary_amount
                 else:
-                    pay_amt = ser.amount if ser.direction == "credit" else -ser.amount
+                    pay_amt = ser.typical_amount or ser.amount
             add(
                 CashItem(
                     item_date=d,
@@ -568,7 +578,9 @@ def _add_variable_envelopes(state: UserState, items: list[CashItem], start: date
         month_totals = [by_cat_month[(y, m, cat)] for (y, m) in months if by_cat_month[(y, m, cat)] > 0]
         if not month_totals:
             continue
-        conservative = sum(month_totals) / len(month_totals)
+        mean_amt = sum(month_totals) / len(month_totals)
+        # Commute spend is lumpy; use the recent peak. Other variable spend uses the mean.
+        conservative = max(month_totals) if cat == "transport" else mean_amt
         if conservative < 1:
             continue
         if cat not in state.protect:
@@ -633,7 +645,7 @@ def simulate(
 ) -> tuple[bool, float, date | None]:
     extra_debits = extra_debits or []
     by_day: dict[date, list[tuple[int, float]]] = defaultdict(list)
-    # rank: 0 credits, 1 extra payments, 2 other debits
+    # Same-day order: credits first (salary on payday can fund the payment), then plan, then other debits.
     for it in items:
         rank = 0 if it.amount >= 0 else 2
         by_day[it.item_date].append((rank, it.amount))
@@ -676,10 +688,26 @@ def amount_safe_to_pay(state: UserState, items: list[CashItem]) -> float:
 
 
 def earliest_full_payment(state: UserState, items: list[CashItem]) -> date | None:
+    """First date a single full payment is safe.
+
+    If another payday still falls on or before the request deadline, require
+    the payment to survive without that next salary. That keeps earliest dates
+    conservative when the user still has time to wait for another paycheck.
+    """
     end = state.request_date + timedelta(days=FORECAST_DAYS)
+    salaries = sorted({it.item_date for it in items if it.category == "salary" and it.amount > 0})
     d = state.request_date
     while d <= end:
-        ok, _, _ = simulate(state, items, [(d, state.requested)])
+        next_after = [s for s in salaries if s > d]
+        use_items = items
+        if next_after and next_after[0] <= state.deadline:
+            drop = next_after[0]
+            use_items = [
+                it
+                for it in items
+                if not (it.category == "salary" and it.item_date == drop)
+            ]
+        ok, _, _ = simulate(state, use_items, [(d, state.requested)])
         if ok:
             return d
         d += timedelta(days=1)
@@ -924,13 +952,30 @@ def evaluate_state(state: UserState) -> Decision:
                 if early and early > state.request_date and "full_payment" in methods:
                     consider("wait", [(early, state.requested)], changes)
 
+    def _change_cut(blob: str) -> float:
+        if blob == "none":
+            return 0.0
+        total = 0.0
+        for bit in blob.split("|"):
+            if bit.startswith("stop:"):
+                eid = bit.split(":", 1)[1]
+                ser = next((s for s in state.series if s.event_id == eid), None)
+                if ser:
+                    total += ser.amount
+            elif bit.startswith("reduce_to:"):
+                _, eid, amt = bit.split(":", 2)
+                ser = next((s for s in state.series if s.event_id == eid), None)
+                if ser:
+                    total += max(0.0, ser.amount - float(amt))
+        return total
+
     def _change_penalty(blob: str) -> tuple[int, int]:
         if blob == "none":
             return (0, 0)
         bits = [b for b in blob.split("|") if b]
         lifestyle = 0
         for bit in bits:
-            eid = bit.split(":")[1] if bit.startswith("stop:") else bit.split(":")[1]
+            eid = bit.split(":")[1]
             ser = next((s for s in state.series if s.event_id == eid), None)
             if ser and ser.category in {"shopping", "dining", "entertainment"}:
                 lifestyle += 1
@@ -943,6 +988,7 @@ def evaluate_state(state: UserState) -> Decision:
             c.total_paid,
             c.starts.toordinal() if c.starts else 10**9,
             c.n_payments,
+            _change_cut(c.spending_changes),
             _change_penalty(c.spending_changes),
             c.option_id or "zzz",
         )

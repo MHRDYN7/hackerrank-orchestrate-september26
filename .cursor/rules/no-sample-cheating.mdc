@@ -1,0 +1,13 @@
+---
+description: Prompts must stay general; no sample-specific gold hints
+alwaysApply: true
+---
+
+# General prompts only
+
+When changing the agent system prompt or tool descriptions, keep instructions general and spec-based.
+
+- Do not mention specific `request_id`s, user IDs, gold labels, or sample_requests.csv answers.
+- Do not add “if this looks like the laptop / streaming / IDR trip case, output X” shortcuts.
+- Tune wording so the model applies the official decision rules to any request. Sample overfitting will not transfer to the 250-row eval set.
+- Exact numeric fields still come from the engine. The model may pick a legal candidate and write the explanation; it must not be told the sample gold row.

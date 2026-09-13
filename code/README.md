@@ -10,7 +10,7 @@ From this `code/` directory:
 uv sync
 ```
 
-Copy `../.env.example` to `../.env` and add numbered Gemini keys (`GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, …). Keys are optional: without them the run is engine-only (template explanations).
+Copy `.env.example` to `.env` (repo root or `code/`) and set `GEMINI_API_KEY`. The run starts on `gemini-3.5-flash-lite` at `thinking_level=high`. After a 429 / daily RPD cap it switches to `gemini-3.1-flash-lite` on the same key. Only Flash-Lite models are used. Without a key the run is engine-only.
 
 ## Run
 

@@ -1,0 +1,14 @@
+---
+description: Gemini key and Flash-Lite model fallback for Buy or Wait?
+alwaysApply: true
+---
+
+# Gemini quota and models
+
+- Use only Flash-Lite models. Never call Pro, Flash (non-lite), or other families (rate limits are too low).
+- Primary model: `gemini-3.5-flash-lite`. Free-tier caps are about **15 RPM**, **250k TPM**, **500 RPD**. Pace calls (~12/min) and keep prompts/tool dumps small.
+- A 429 from RPM/TPM is a wait-and-retry, not a model switch.
+- Switch to `gemini-3.1-flash-lite` on the same `GEMINI_API_KEY` only after **daily RPD** on 3.5 is exhausted.
+- After another 500 RPD on 3.1 Flash-Lite, the user will replace the key in `.env`. Do not invent extra keys.
+- Load `GEMINI_API_KEY` from repo-root `.env` or `code/.env`. Never commit `.env`.
+- Always request max thinking: `thinking_level="high"`.

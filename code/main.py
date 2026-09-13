@@ -8,6 +8,10 @@ from pathlib import Path
 # Allow `uv run python main.py` from code/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from buy_or_wait.keys import load_env
+
+load_env()
+
 from buy_or_wait.graph import build_graph, run_request
 from buy_or_wait.keys import load_key_ring
 from buy_or_wait.paths import OUTPUT_PATH, USAGE_REPORT_PATH
@@ -27,13 +31,22 @@ def write_output(rows: list[dict[str, str]], path=OUTPUT_PATH) -> None:
             writer.writerow({col: row.get(col, "") for col in OUTPUT_COLUMNS})
 
 
-def score_samples(store) -> None:
+def score_samples(store, use_agent: bool = True) -> None:
     ids = sorted(store.samples.keys())
     exact = 0
-    print(f"Scoring {len(ids)} sample requests (engine only)")
+    ring = load_key_ring()
+    app = None
+    if use_agent and ring.has_keys():
+        app = build_graph(ring)
+        print(f"Scoring {len(ids)} sample requests with {ring.model} (key loaded, thinking_level=high)")
+    else:
+        print(f"Scoring {len(ids)} sample requests (engine only)")
     for rid in ids:
         gold = store.samples[rid]
-        pred = decide_row(store, rid)
+        if app is not None:
+            pred = run_request(app, rid, ring)
+        else:
+            pred = decide_row(store, rid)
         fields = [
             "affordability_status",
             "recommended_payment_method",
@@ -99,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.preprocess_only:
         return 0
     if args.samples:
-        score_samples(store)
+        score_samples(store, use_agent=not args.engine_only)
         return 0
 
     rows = run_eval(store, use_agent=not args.engine_only)
