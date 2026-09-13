@@ -54,7 +54,11 @@ def _llm(ring: KeyRing):
         model = ChatGoogleGenerativeAI(**kwargs)
     except TypeError:
         kwargs.pop("thinking_level", None)
-        model = ChatGoogleGenerativeAI(**kwargs)
+        try:
+            model = ChatGoogleGenerativeAI(**kwargs)
+        except TypeError:
+            kwargs.pop("max_retries", None)
+            model = ChatGoogleGenerativeAI(**kwargs)
     return model.bind_tools(ALL_TOOLS)
 
 

@@ -15,7 +15,7 @@ load_env()
 
 from buy_or_wait.graph import build_graph, run_request
 from buy_or_wait.keys import load_key_ring
-from buy_or_wait.paths import OUTPUT_PATH, USAGE_REPORT_PATH
+from buy_or_wait.paths import OUTPUT_PATH, SAMPLE_PREDICTIONS_PATH, USAGE_REPORT_PATH
 from buy_or_wait.preprocess import build_store
 from buy_or_wait.runner import decide_row
 from buy_or_wait.tools import bind_store
@@ -123,23 +123,37 @@ def score_samples(store, use_agent: bool = True, ids: list[str] | None = None, c
         return rid, pred, gold
 
     exact = 0
+    results: dict[str, tuple[dict, dict]] = {}
     workers = max(1, concurrency if app is not None else 1)
     if workers == 1:
         for rid in ids:
             _, pred, gold = one(rid)
+            results[rid] = (pred, gold)
             if _print_score(rid, pred, gold):
                 exact += 1
     else:
-        results: dict[str, tuple[dict, dict]] = {}
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {pool.submit(one, rid): rid for rid in ids}
             for fut in as_completed(futs):
                 rid, pred, gold = fut.result()
                 results[rid] = (pred, gold)
-                _print_score(rid, pred, gold)
-                if not [f for f in SCORE_FIELDS if str(pred.get(f, "")) != str(gold.get(f, ""))]:
+                if _print_score(rid, pred, gold):
                     exact += 1
     print(f"Exact field match (except explanation): {exact}/{len(ids)}", flush=True)
+    field_hits = {f: 0 for f in SCORE_FIELDS}
+    for rid in ids:
+        pred, gold = results[rid]
+        for f in SCORE_FIELDS:
+            if str(pred.get(f, "")) == str(gold.get(f, "")):
+                field_hits[f] += 1
+    n = max(1, len(ids))
+    for f in SCORE_FIELDS:
+        print(f"  {f}: {field_hits[f]}/{len(ids)}", flush=True)
+    write_output(
+        [{"request_id": rid, **results[rid][0]} for rid in ids],
+        SAMPLE_PREDICTIONS_PATH,
+    )
+    print(f"Wrote {SAMPLE_PREDICTIONS_PATH}", flush=True)
 
 
 def run_eval(store, use_agent: bool, concurrency: int = 10) -> list[dict[str, str]]:
