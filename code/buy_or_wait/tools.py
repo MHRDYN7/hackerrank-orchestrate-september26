@@ -867,7 +867,7 @@ def commit_decision(
         "spending_changes_needed": spec_row["spending_changes_needed"],
         "decision_explanation": (decision_explanation or "").replace("\n", " ").strip(),
     }
-    if agent_method != spec.method or not row["decision_explanation"]:
+    if agent_method != spec.recommended_payment_method or not row["decision_explanation"]:
         row["decision_explanation"] = spec_row["decision_explanation"]
     changes = _parse_changes(row["spending_changes_needed"])
     plan_items = build_forecast(state, changes) if changes else build_forecast(state, {})
@@ -881,7 +881,7 @@ def commit_decision(
     row["_simulate_safe"] = ok
     row["_trough"] = trough
     row["_first_breach"] = iso(breach)
-    row["_spec_method"] = spec.method
+    row["_spec_method"] = spec.recommended_payment_method
     if errs:
         row["_validation"] = errs
     clean = {k: v for k, v in row.items() if not k.startswith("_")}
